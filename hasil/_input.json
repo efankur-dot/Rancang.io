@@ -1,0 +1,436 @@
+{
+  "proyek": {
+    "nama": "Rumah Tipe 60 Estetik",
+    "pemilik": "Rancang.io",
+    "lokasi": "Desain Eksterior"
+  },
+  "satuan": "mm",
+  "lantai": {
+    "elevasi": 150,
+    "tinggi_dinding": 3200,
+    "tinggi_plafon": 3000
+  },
+  "dinding_default": {
+    "tebal": 150,
+    "bahan": "bata merah 1/2 batu",
+    "finishing": "plester, aci, cat"
+  },
+  "dinding": [
+    {
+      "id": "W1",
+      "a": [
+        0,
+        0
+      ],
+      "b": [
+        6000,
+        0
+      ],
+      "tipe": "luar"
+    },
+    {
+      "id": "W2",
+      "a": [
+        6000,
+        0
+      ],
+      "b": [
+        6000,
+        10000
+      ],
+      "tipe": "luar"
+    },
+    {
+      "id": "W3",
+      "a": [
+        6000,
+        10000
+      ],
+      "b": [
+        0,
+        10000
+      ],
+      "tipe": "luar"
+    },
+    {
+      "id": "W4",
+      "a": [
+        0,
+        10000
+      ],
+      "b": [
+        0,
+        0
+      ],
+      "tipe": "luar"
+    },
+    {
+      "id": "I1",
+      "a": [
+        3000,
+        0
+      ],
+      "b": [
+        3000,
+        3000
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I2",
+      "a": [
+        3000,
+        3000
+      ],
+      "b": [
+        3000,
+        6000
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I3",
+      "a": [
+        3000,
+        6000
+      ],
+      "b": [
+        3000,
+        10000
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I4",
+      "a": [
+        0,
+        3000
+      ],
+      "b": [
+        3000,
+        3000
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I5",
+      "a": [
+        0,
+        6000
+      ],
+      "b": [
+        3000,
+        6000
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I6",
+      "a": [
+        3000,
+        4500
+      ],
+      "b": [
+        6000,
+        4500
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I7",
+      "a": [
+        0,
+        8000
+      ],
+      "b": [
+        3000,
+        8000
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I8",
+      "a": [
+        1500,
+        8000
+      ],
+      "b": [
+        1500,
+        10000
+      ],
+      "tipe": "dalam"
+    }
+  ],
+  "bukaan": [
+    {
+      "id": "D1",
+      "jenis": "pintu",
+      "dinding": "W1",
+      "offset": 4500,
+      "lebar": 900,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "Ruang Tamu",
+      "engsel": "awal"
+    },
+    {
+      "id": "D2",
+      "jenis": "pintu",
+      "dinding": "I1",
+      "offset": 2000,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "Kamar Tidur Utama",
+      "engsel": "akhir"
+    },
+    {
+      "id": "D3",
+      "jenis": "pintu",
+      "dinding": "I2",
+      "offset": 500,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "Kamar Tidur Anak",
+      "engsel": "awal"
+    },
+    {
+      "id": "D4",
+      "jenis": "pintu",
+      "dinding": "I7",
+      "offset": 300,
+      "lebar": 700,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "KM / WC",
+      "engsel": "awal"
+    },
+    {
+      "id": "D5",
+      "jenis": "pintu",
+      "dinding": "I7",
+      "offset": 1800,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "R. Cuci / Jemur",
+      "engsel": "awal"
+    },
+    {
+      "id": "D6",
+      "jenis": "pintu",
+      "dinding": "W3",
+      "offset": 1000,
+      "lebar": 900,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "Teras Belakang",
+      "engsel": "awal"
+    },
+    {
+      "id": "B1",
+      "jenis": "bukaan",
+      "dinding": "I6",
+      "offset": 600,
+      "lebar": 1500,
+      "tinggi": 2100,
+      "ambang": 0
+    },
+    {
+      "id": "J1",
+      "jenis": "jendela",
+      "dinding": "W1",
+      "offset": 1200,
+      "lebar": 1200,
+      "tinggi": 1200,
+      "ambang": 900
+    },
+    {
+      "id": "J2",
+      "jenis": "jendela",
+      "dinding": "W1",
+      "offset": 3100,
+      "lebar": 1200,
+      "tinggi": 1200,
+      "ambang": 900
+    },
+    {
+      "id": "J3",
+      "jenis": "jendela",
+      "dinding": "W2",
+      "offset": 1500,
+      "lebar": 1200,
+      "tinggi": 1200,
+      "ambang": 900
+    },
+    {
+      "id": "J4",
+      "jenis": "jendela",
+      "dinding": "W2",
+      "offset": 6000,
+      "lebar": 1200,
+      "tinggi": 1200,
+      "ambang": 900
+    },
+    {
+      "id": "J5",
+      "jenis": "jendela",
+      "dinding": "W4",
+      "offset": 2000,
+      "lebar": 1200,
+      "tinggi": 1200,
+      "ambang": 900
+    },
+    {
+      "id": "J6",
+      "jenis": "jendela",
+      "dinding": "W4",
+      "offset": 500,
+      "lebar": 600,
+      "tinggi": 600,
+      "ambang": 1500
+    }
+  ],
+  "ruang": [
+    {
+      "nama": "Kamar Tidur Utama",
+      "kotak": [
+        0,
+        0,
+        3000,
+        3000
+      ],
+      "lantai": "keramik 40x40",
+      "plafon": "gypsum 9 mm"
+    },
+    {
+      "nama": "Ruang Tamu & Keluarga",
+      "kotak": [
+        3000,
+        0,
+        6000,
+        4500
+      ],
+      "lantai": "keramik 40x40",
+      "plafon": "gypsum 9 mm"
+    },
+    {
+      "nama": "Kamar Tidur Anak",
+      "kotak": [
+        0,
+        3000,
+        3000,
+        6000
+      ],
+      "lantai": "keramik 40x40",
+      "plafon": "gypsum 9 mm"
+    },
+    {
+      "nama": "Dapur & R. Makan",
+      "kotak": [
+        3000,
+        4500,
+        6000,
+        10000
+      ],
+      "lantai": "keramik 40x40",
+      "plafon": "gypsum 9 mm"
+    },
+    {
+      "nama": "Ruang Kerja / Belajar",
+      "kotak": [
+        0,
+        6000,
+        3000,
+        8000
+      ],
+      "lantai": "keramik 40x40",
+      "plafon": "gypsum 9 mm"
+    },
+    {
+      "nama": "KM / WC",
+      "kotak": [
+        0,
+        8000,
+        1500,
+        10000
+      ],
+      "lantai": "keramik 20x20",
+      "plafon": "gypsum 9 mm",
+      "keramik_dinding_tinggi": 1500
+    },
+    {
+      "nama": "R. Cuci / Jemur",
+      "kotak": [
+        1500,
+        8000,
+        3000,
+        10000
+      ],
+      "lantai": "keramik 20x20",
+      "plafon": "gypsum 9 mm"
+    }
+  ],
+  "struktur": {
+    "pondasi": {
+      "jenis": "batu kali",
+      "lebar_bawah": 600,
+      "lebar_atas": 300,
+      "tinggi": 700
+    },
+    "sloof": [
+      150,
+      200
+    ],
+    "kolom": [
+      150,
+      150
+    ],
+    "ring_balok": [
+      150,
+      150
+    ],
+    "jarak_kolom_maks": 3000
+  },
+  "atap": {
+    "jenis": "pelana",
+    "arah_nok": "x",
+    "kemiringan_derajat": 35,
+    "overstek": 800,
+    "penutup": "genteng metal",
+    "rangka": "baja ringan",
+    "jarak_kuda_kuda": 1200,
+    "profil_baja": "c75.75"
+  },
+  "eksterior": {
+    "teras": {
+      "panjang": 1500,
+      "lebar": 3000,
+      "elevasi": 50
+    },
+    "carport": {
+      "panjang": 5000,
+      "lebar": 3000,
+      "elevasi": 0
+    },
+    "pagar_depan": {
+      "tinggi": 1200,
+      "material": "bata ekspos + besi hollow"
+    }
+  },
+  "potongan": [
+    {
+      "nama": "A-A",
+      "arah": "x",
+      "posisi": 1500,
+      "lihat": "utara"
+    },
+    {
+      "nama": "B-B",
+      "arah": "y",
+      "posisi": 4000,
+      "lihat": "timur"
+    }
+  ]
+}
