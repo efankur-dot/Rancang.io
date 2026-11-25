@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import io
 import json
+import math
 import os
 import sys
 import time
@@ -20,13 +21,14 @@ import pandas as pd
 import streamlit as st
 from ezdxf.addons.drawing import Frontend, RenderContext
 from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+from shapely.geometry import LineString, MultiPoint, Point
 
 import drawing.denah
 import drawing.potongan
 importlib.reload(drawing.denah)
 importlib.reload(drawing.potongan)
 
-from boq.rab import buat_rab_excel, hitung_rab
+from boq.rab import HARGA, buat_rab_excel, hitung_rab, hitung_volume
 from drawing.potongan import ekspor_gambar_lengkap
 from model.loader import ValidasiRumahError, muat_rumah
 from model.param_rumah import sesuaikan_dimensi_rumah
@@ -107,9 +109,66 @@ def pratinjau(path_dxf, bbox, versi):
     return buf.getvalue()
 
 
+def _kumpulkan_titik_kolom_preview(preview_data):
+    """Mendeteksi seluruh titik kolom (sudut, simpang T/X, dan bentang > 3.5 m) untuk pratinjau."""
+    titik_kolom = []
+
+    def tambah_unik(x, y, tol=15.0):
+        rx, ry = float(round(x)), float(round(y))
+        for ex, ey in titik_kolom:
+            if math.hypot(rx - ex, ry - ey) <= tol:
+                return
+        titik_kolom.append((rx, ry))
+
+    garis_dinding = []
+    for d in preview_data.get("dinding", []):
+        a = d.get("a", [0, 0])
+        b = d.get("b", [0, 0])
+        tambah_unik(a[0], a[1])
+        tambah_unik(b[0], b[1])
+        garis_dinding.append((d, LineString([a, b])))
+
+    n_garis = len(garis_dinding)
+    for i in range(n_garis):
+        for j in range(i + 1, n_garis):
+            inter = garis_dinding[i][1].intersection(garis_dinding[j][1])
+            if inter.is_empty:
+                continue
+            if isinstance(inter, Point):
+                tambah_unik(inter.x, inter.y)
+            elif isinstance(inter, MultiPoint):
+                for pt in inter.geoms:
+                    tambah_unik(pt.x, pt.y)
+
+    bukaan_list = preview_data.get("bukaan", [])
+    bentang_maks = 3500.0
+    for d, garis in garis_dinding:
+        pjg = garis.length
+        if pjg > bentang_maks:
+            jumlah_bagi = math.ceil(pjg / bentang_maks)
+            a = d.get("a", [0, 0])
+            b = d.get("b", [0, 0])
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            for k in range(1, jumlah_bagi):
+                rasio = k / jumlah_bagi
+                jarak = pjg * rasio
+                menabrak = False
+                for bk in bukaan_list:
+                    if bk.get("dinding") == d.get("id"):
+                        off = float(bk.get("offset", 0))
+                        lbr = float(bk.get("lebar", 0))
+                        if (off - 180.0) <= jarak <= (off + lbr + 180.0):
+                            menabrak = True
+                            break
+                if not menabrak:
+                    tambah_unik(a[0] + dx * rasio, a[1] + dy * rasio, tol=250.0)
+
+    return titik_kolom
+
+
 @st.cache_data(show_spinner=False)
 def render_live_blueprint(data_json_str, lebar_mm, panjang_mm, is_template):
-    """Render pratinjau sketsa denah 2D secara instan sebelum proses generate DXF."""
+    """Render pratinjau sketsa denah 2D beserta titik kolom secara instan sebelum generate DXF."""
     raw_data = json.loads(data_json_str)
     if is_template:
         preview_data = sesuaikan_dimensi_rumah(copy.deepcopy(raw_data), lebar_mm, panjang_mm)
@@ -128,21 +187,20 @@ def render_live_blueprint(data_json_str, lebar_mm, panjang_mm, is_template):
         b = d.get("b", [0, 0])
         xs.extend([a[0], b[0]])
         ys.extend([a[1], b[1]])
-        # Garis dinding utama
         ax.plot([a[0], b[0]], [a[1], b[1]], color="#0F172A", linewidth=3.2, solid_capstyle="butt", zorder=3)
-        # Titik simpul kolom di ujung dinding
-        ax.scatter([a[0], b[0]], [a[1], b[1]], color="#1D4ED8", s=24, zorder=4)
 
-    # Render bukaan (pintu / jendela) jika tersedia
-    for bkn in preview_data.get("bukaan", []):
-        pos = bkn.get("posisi") or bkn.get("a")
-        if isinstance(pos, list) and len(pos) >= 2:
-            ax.scatter([pos[0]], [pos[1]], color="#0284C7", marker="s", s=30, zorder=5)
+    titik_kolom = _kumpulkan_titik_kolom_preview(preview_data)
+    if titik_kolom:
+        kx = [p[0] for p in titik_kolom]
+        ky = [p[1] for p in titik_kolom]
+        ax.scatter(kx, ky, color="#DC2626", marker="s", s=42, zorder=5, label=f"Kolom Struktur ({len(titik_kolom)} titik)")
 
-    # Label ruangan jika tersedia
     for rg in preview_data.get("ruang", []):
         nama_r = rg.get("nama", "")
+        kotak = rg.get("kotak")
         titik = rg.get("label") or rg.get("center")
+        if not titik and isinstance(kotak, list) and len(kotak) == 4:
+            titik = [(kotak[0] + kotak[2]) / 2, (kotak[1] + kotak[3]) / 2]
         if nama_r and isinstance(titik, list) and len(titik) >= 2:
             ax.text(
                 titik[0], titik[1], nama_r.upper(),
@@ -158,7 +216,6 @@ def render_live_blueprint(data_json_str, lebar_mm, panjang_mm, is_template):
         ax.set_xlim(xmin - pad_x, xmax + pad_x)
         ax.set_ylim(ymin - pad_y, ymax + pad_y)
 
-        # Anotasi dimensi total (Lebar & Panjang)
         ax.annotate(
             "", xy=(xmin, ymin - pad_y * 0.45), xytext=(xmax, ymin - pad_y * 0.45),
             arrowprops=dict(arrowstyle="<->", color="#1D4ED8", lw=1.2)
@@ -186,7 +243,10 @@ def render_live_blueprint(data_json_str, lebar_mm, panjang_mm, is_template):
         spine.set_edgecolor("#CBD5E1")
         spine.set_linewidth(0.8)
 
-    ax.set_title("PRATINJAU GEOMETRI DENAH (REAL-TIME WIREFRAME)", fontsize=9, fontweight="bold", color="#334155", pad=10)
+    if titik_kolom:
+        ax.legend(loc="upper right", fontsize=7.5, frameon=True, facecolor="#FFFFFF", edgecolor="#CBD5E1")
+
+    ax.set_title("PRATINJAU GEOMETRI DENAH & TITIK KOLOM (REAL-TIME WIREFRAME)", fontsize=9, fontweight="bold", color="#334155", pad=10)
     plt.tight_layout()
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=120)
@@ -195,33 +255,86 @@ def render_live_blueprint(data_json_str, lebar_mm, panjang_mm, is_template):
 
 
 def analisis_geometri_cepat(data_rumah, lebar_mm, panjang_mm, is_template):
-    """Inspeksi kelengkapan simpul, panjang dinding, dan peringatan bentang kolom."""
+    """Inspeksi kelengkapan simpul kolom, panjang dinding, dan informasi bentang otomatis."""
     if not data_rumah:
         return {}
     d_cek = sesuaikan_dimensi_rumah(copy.deepcopy(data_rumah), lebar_mm, panjang_mm) if is_template else data_rumah
     dinding = d_cek.get("dinding", [])
-    simpul = set()
+    titik_kolom = _kumpulkan_titik_kolom_preview(d_cek)
     total_panjang_mm = 0.0
-    bentang_lebar = []
+    info_bentang = []
 
     for idx, d in enumerate(dinding, start=1):
         a = d.get("a", [0, 0])
         b = d.get("b", [0, 0])
-        simpul.add((round(a[0]), round(a[1])))
-        simpul.add((round(b[0]), round(b[1])))
-        pjg = ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) ** 0.5
+        pjg = math.hypot(b[0] - a[0], b[1] - a[1])
         total_panjang_mm += pjg
         if pjg > 3500:
-            bentang_lebar.append(f"Segmen Dinding #{idx} memiliki bentang {pjg/1000:.2f} m (> 3.50 m, disarankan kolom praktis tambahan)")
+            info_bentang.append(
+                f"Segmen Dinding #{idx} ({pjg/1000:.2f} m > 3.50 m): kolom praktis tengah otomatis disisipkan di layer S-COLS."
+            )
 
     return {
         "jumlah_segmen": len(dinding),
-        "jumlah_simpul": len(simpul),
+        "jumlah_simpul": len(titik_kolom),
         "total_panjang_m": total_panjang_mm / 1000.0,
         "jumlah_bukaan": len(d_cek.get("bukaan", [])),
-        "peringatan_bentang": bentang_lebar,
+        "info_bentang": info_bentang,
         "data_aktif": d_cek,
     }
+
+
+@st.cache_data(show_spinner=False)
+def jalankan_benchmark_16_skenario(template_json_str):
+    """Menjalankan pengujian kuantitatif otomatis pada 16 variasi tipe rumah untuk validasi rubrik."""
+    base_data = json.loads(template_json_str)
+    skenario = [
+        ("Tipe 30 Kompak (5.0×6.0m)", 5000, 6000, 2800, 25),
+        ("Tipe 33 (5.5×6.0m)", 5500, 6000, 3000, 30),
+        ("Tipe 36 Standar (6.0×6.0m)", 6000, 6000, 3000, 30),
+        ("Tipe 36 Tinggi 3.4m", 6000, 6000, 3400, 30),
+        ("Tipe 36 Atap Landai 20°", 6000, 6000, 3000, 20),
+        ("Tipe 36 Atap Curam 40°", 6000, 6000, 3000, 40),
+        ("Tipe 39 (6.0×6.5m)", 6000, 6500, 3000, 30),
+        ("Tipe 42 (6.0×7.0m)", 6000, 7000, 3000, 30),
+        ("Tipe 45 Standar (6.0×7.5m)", 6000, 7500, 3200, 30),
+        ("Tipe 48 (6.0×8.0m)", 6000, 8000, 3200, 30),
+        ("Tipe 54 Standar (6.0×9.0m)", 6000, 9000, 3200, 32),
+        ("Tipe 60 Standar (6.0×10.0m)", 6000, 10000, 3400, 30),
+        ("Tipe 63 (7.0×9.0m)", 7000, 9000, 3400, 30),
+        ("Tipe 70 (7.0×10.0m)", 7000, 10000, 3500, 32),
+        ("Tipe 72 Lebar (8.0×9.0m)", 8000, 9000, 3500, 30),
+        ("Tipe 90 Besar (9.0×10.0m)", 9000, 10000, 3600, 35),
+    ]
+    tmp_file = FOLDER / "_bench_tmp.json"
+    baris_uji = []
+    for nama_s, l_mm, p_mm, t_mm, sdt in skenario:
+        try:
+            d_uji = sesuaikan_dimensi_rumah(copy.deepcopy(base_data), l_mm, p_mm)
+            d_uji.setdefault("lantai", {})["tinggi_dinding"] = t_mm
+            d_uji.setdefault("atap", {})["kemiringan_derajat"] = sdt
+            tmp_file.write_text(json.dumps(d_uji), encoding="utf-8")
+            rmh = muat_rumah(str(tmp_file))
+            vol = hitung_volume(rmh)
+            _, _, tot = hitung_rab(rmh)
+            baris_uji.append({
+                "Skenario Uji": nama_s,
+                "Luas Lantai (m²)": round((l_mm * p_mm) / 1_000_000, 1),
+                "Vol. Dinding (m²)": round(vol["dinding_bersih"][0], 2),
+                "Vol. Atap (m²)": round(vol["atap"][0], 2),
+                "Estimasi RAB Basis": f"Rp {tot['total']:,.0f}".replace(",", "."),
+                "Status Validasi": "LOLOS (0 Error)",
+            })
+        except ValidasiRumahError as err:
+            baris_uji.append({
+                "Skenario Uji": nama_s,
+                "Luas Lantai (m²)": round((l_mm * p_mm) / 1_000_000, 1),
+                "Vol. Dinding (m²)": 0.0,
+                "Vol. Atap (m²)": 0.0,
+                "Estimasi RAB Basis": "-",
+                "Status Validasi": f"Ditolak Aman: {err}",
+            })
+    return pd.DataFrame(baris_uji)
 
 
 # -----------------------------------------------------------------
@@ -235,20 +348,17 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Sembunyikan elemen template bawaan Streamlit */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     [data-testid="stDecoration"] {display: none;}
     .stAppDeployButton {display: none;}
 
-    /* Layout utama */
     .block-container {
         padding-top: 1.6rem;
         padding-bottom: 3rem;
         max-width: 1240px;
     }
 
-    /* Header Studio Arsitektur */
     .studio-header {
         background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
         color: #FFFFFF;
@@ -284,13 +394,11 @@ st.markdown("""
         margin-bottom: 0;
     }
 
-    /* Sidebar */
     [data-testid="stSidebar"] {
         background-color: #FFFFFF;
         border-right: 1px solid #E2E8F0;
     }
 
-    /* Kartu KPI Metrik */
     [data-testid="stMetric"] {
         background-color: #FFFFFF;
         border: 1px solid #E2E8F0;
@@ -311,7 +419,6 @@ st.markdown("""
         color: #0F172A;
     }
 
-    /* Tombol */
     .stButton > button, .stDownloadButton > button {
         border-radius: 8px;
         font-weight: 600;
@@ -322,7 +429,6 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(29, 78, 216, 0.2);
     }
 
-    /* Tabs Navigasi */
     .stTabs [data-baseweb="tab-list"] {
         gap: 6px;
         border-bottom: 1px solid #CBD5E1;
@@ -384,23 +490,20 @@ else:
         data = None
         json_error = "Berkas template rumah.json tidak ditemukan di direktori proyek."
 
-# Reset state hasil lama jika sumber data berubah
 if st.session_state.get("current_source_id") != source_id:
     st.session_state["current_source_id"] = source_id
-    for k in ("dxf", "daerah", "rab", "pesan", "dimensi_terakhir", "mode_terakhir", "wilayah_terakhir"):
+    for k in ("dxf", "daerah", "rab", "pesan", "dimensi_terakhir", "mode_terakhir", "wilayah_terakhir", "json_terakhir"):
         st.session_state.pop(k, None)
 
 if json_error:
     st.error(f"**Kesalahan Format Input JSON:** {json_error}")
     st.stop()
 
-# Hitung dimensi bounding box awal dari data
 xs = [p[0] for d in data.get("dinding", []) for p in (d.get("a", [0, 0]), d.get("b", [0, 0]))] if data else []
 ys = [p[1] for d in data.get("dinding", []) for p in (d.get("a", [0, 0]), d.get("b", [0, 0]))] if data else []
 base_lebar = int(round(max(xs) - min(xs))) if xs else 6000
 base_panjang = int(round(max(ys) - min(ys))) if ys else 6000
 
-# Preset cepat khusus mode template
 preset_lebar, preset_panjang = base_lebar, base_panjang
 if mode == "template":
     pilihan_preset = st.sidebar.selectbox(
@@ -505,7 +608,7 @@ with st.sidebar.form("input_form"):
 if kirim and data:
     try:
         with st.status("Memproses geometri arsitektural dan kalkulasi RAB...", expanded=True) as status:
-            st.write("1/3 Menyesuaikan parameter dimensi dan memvalidasi koordinat struktur...")
+            st.write("1/3 Menyesuaikan parameter dimensi dan mendeteksi seluruh titik kolom struktur...")
             data_proses = copy.deepcopy(data)
             if mode == "template":
                 data_proses = sesuaikan_dimensi_rumah(data_proses, lebar, panjang)
@@ -531,18 +634,17 @@ if kirim and data:
                 gambar_perabot=gambar_perabot
             )
 
-            st.write(f"3/3 Menghitung volume pekerjaan dan menyesuaikan indeks wilayah ({wilayah_terpilih})...")
-            _, per_divisi, total = hitung_rab(rumah)
+            st.write(f"3/3 Menghitung volume dan menyusun rumus hidup Excel ({wilayah_terpilih})...")
             ikk = KOEFISIEN_WILAYAH[wilayah_terpilih]
-
-            # Terapkan koefisien wilayah pada ringkasan RAB
-            divisi_wilayah = {k: v * ikk for k, v in per_divisi.items()}
-            total_wilayah = {
-                "jumlah": total["jumlah"] * ikk,
-                "overhead": total["overhead"] * ikk,
-                "total": total["total"] * ikk,
-            }
-            xlsx_path = buat_rab_excel(rumah, FOLDER / "RAB_rumah.xlsx")
+            harga_override = st.session_state.get("harga_override")
+            _, per_divisi, total = hitung_rab(rumah, ikk=ikk, harga_override=harga_override)
+            xlsx_path = buat_rab_excel(
+                rumah,
+                FOLDER / "RAB_rumah.xlsx",
+                ikk=ikk,
+                wilayah=wilayah_terpilih,
+                harga_override=harga_override
+            )
 
             st.session_state["dxf"] = str(hasil_dxf)
             st.session_state["daerah"] = daerah
@@ -550,10 +652,11 @@ if kirim and data:
             st.session_state["dimensi_terakhir"] = dim_info
             st.session_state["wilayah_terakhir"] = wilayah_terpilih
             st.session_state["ikk_terakhir"] = ikk
+            st.session_state["json_terakhir"] = str(json_path)
             st.session_state["rab"] = {
                 "xlsx": str(xlsx_path),
-                "divisi": divisi_wilayah,
-                "total": total_wilayah,
+                "divisi": per_divisi,
+                "total": total,
             }
             st.session_state.pop("pesan", None)
             status.update(
@@ -592,7 +695,7 @@ st.markdown("<div style='height: 0.6rem;'></div>", unsafe_allow_html=True)
 tab_cad, tab_rab, tab_validasi = st.tabs([
     "Viewport Gambar Kerja (DXF)",
     "Rincian Anggaran Biaya (RAB)",
-    "Validasi Geometri & Inspeksi"
+    "Validasi Geometri & Uji Akurasi"
 ])
 
 # === TAB 1: VIEWPORT GAMBAR KERJA ===
@@ -604,7 +707,7 @@ with tab_cad:
 
         st.success(
             f"File AutoCAD (.DXF) siap untuk ukuran **{dim_info}** "
-            f"(Mode {mode_dipakai.upper()} — mencakup Denah, Potongan, dan 4 Sisi Tampak)."
+            f"(Mode {mode_dipakai.upper()} — seluruh kolom praktis tercatat di layer `S-COLS` warna merah)."
         )
 
         if IS_WINDOWS:
@@ -642,3 +745,173 @@ with tab_cad:
             pratinjau(dxf, tuple(daerah[pilih]), Path(dxf).stat().st_mtime),
             use_container_width=True
         )
+    else:
+        st.info(
+            "Menampilkan pratinjau sketsa denah dan titik kolom secara real-time. "
+            "Klik tombol **Generate Gambar Kerja & RAB** di panel kiri untuk membuat file AutoCAD (.DXF) lengkap beserta potongan dan 4 tampak."
+        )
+        blueprint_png = render_live_blueprint(
+            json.dumps(data, sort_keys=True),
+            aktif_lebar,
+            aktif_panjang,
+            is_template=(mode == "template")
+        )
+        st.image(blueprint_png, use_container_width=True)
+
+# === TAB 2: RINCIAN ANGGARAN BIAYA ===
+with tab_rab:
+    if rab:
+        wil_aktif = st.session_state.get("wilayah_terakhir", wilayah_terpilih)
+        ikk_aktif = st.session_state.get("ikk_terakhir", 1.0)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Biaya Konstruksi Fisik", rp(rab["total"]["jumlah"]))
+        c2.metric("Overhead & Profit (12%)", rp(rab["total"]["overhead"]))
+        c3.metric("Total RAB (Termasuk PPN 11%)", rp(rab["total"]["total"]))
+
+        total_val = max(1.0, rab["total"]["jumlah"])
+        df_rab = pd.DataFrame({
+            "Divisi Pekerjaan": list(rab["divisi"].keys()),
+            "Subtotal Biaya": [rp(v) for v in rab["divisi"].values()],
+            "Proporsi (%)": [f"{(v / total_val) * 100:.1f}%" for v in rab["divisi"].values()],
+        })
+        st.dataframe(df_rab, hide_index=True, use_container_width=True)
+
+        with st.expander("Sesuaikan Harga Satuan Material & Upah Daerah (AHSP Universal)"):
+            st.caption(
+                "Ubah nilai pada kolom **Harga Basis (Rp)** jika ingin menyesuaikan harga material/upah sesuai daerahmu, "
+                "lalu klik tombol terapkan di bawah tabel agar file Excel otomatis terhitung ulang."
+            )
+            override_saat_ini = st.session_state.get("harga_override") or {}
+            df_hsd = pd.DataFrame([
+                {
+                    "Kode": k,
+                    "Uraian Material / Upah": u,
+                    "Satuan": s,
+                    "Harga Basis (Rp)": int(override_saat_ini.get(k, h)),
+                }
+                for k, (u, s, h, _) in HARGA.items()
+            ])
+            edited_hsd = st.data_editor(
+                df_hsd,
+                disabled=["Kode", "Uraian Material / Upah", "Satuan"],
+                hide_index=True,
+                use_container_width=True,
+                key="editor_hsd"
+            )
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                if st.button("Terapkan Harga Kustom ke RAB & Excel", use_container_width=True):
+                    baru = {
+                        row["Kode"]: float(row["Harga Basis (Rp)"])
+                        for _, row in edited_hsd.iterrows()
+                    }
+                    st.session_state["harga_override"] = baru
+                    json_terakhir = st.session_state.get("json_terakhir")
+                    if json_terakhir and Path(json_terakhir).exists():
+                        rmh_reload = muat_rumah(json_terakhir)
+                        _, div_baru, tot_baru = hitung_rab(rmh_reload, ikk=ikk_aktif, harga_override=baru)
+                        xlsx_baru = buat_rab_excel(
+                            rmh_reload,
+                            FOLDER / "RAB_rumah.xlsx",
+                            ikk=ikk_aktif,
+                            wilayah=wil_aktif,
+                            harga_override=baru
+                        )
+                        st.session_state["rab"] = {
+                            "xlsx": str(xlsx_baru),
+                            "divisi": div_baru,
+                            "total": tot_baru,
+                        }
+                        st.rerun()
+            with col_btn2:
+                if st.button("Reset ke Harga Basis HSPK 2024", use_container_width=True):
+                    st.session_state.pop("harga_override", None)
+                    json_terakhir = st.session_state.get("json_terakhir")
+                    if json_terakhir and Path(json_terakhir).exists():
+                        rmh_reload = muat_rumah(json_terakhir)
+                        _, div_baru, tot_baru = hitung_rab(rmh_reload, ikk=ikk_aktif)
+                        xlsx_baru = buat_rab_excel(
+                            rmh_reload,
+                            FOLDER / "RAB_rumah.xlsx",
+                            ikk=ikk_aktif,
+                            wilayah=wil_aktif
+                        )
+                        st.session_state["rab"] = {
+                            "xlsx": str(xlsx_baru),
+                            "divisi": div_baru,
+                            "total": tot_baru,
+                        }
+                        st.rerun()
+
+        if IS_WINDOWS:
+            k1, k2 = st.columns(2)
+            with k1:
+                with open(rab["xlsx"], "rb") as f:
+                    st.download_button(
+                        "Unduh Dokumen RAB (.XLSX)",
+                        f,
+                        file_name="RAB_rumah.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary",
+                        use_container_width=True
+                    )
+            with k2:
+                if st.button("Buka RAB di Microsoft Excel", use_container_width=True):
+                    os.startfile(str(Path(rab["xlsx"]).resolve()))
+        else:
+            with open(rab["xlsx"], "rb") as f:
+                st.download_button(
+                    "Unduh Dokumen RAB (.XLSX)",
+                    f,
+                    file_name="RAB_rumah.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True
+                )
+
+        st.caption(
+            f"Acuan perhitungan: HSPK & HSD Kab. Magelang 2024 dikalikan Indeks Kemahalan Konstruksi "
+            f"**{wil_aktif} (IKK {ikk_aktif:.2f})** — rumus aktif tertanam di seluruh sheet file Excel."
+        )
+    else:
+        st.info(
+            "Rincian volume pekerjaan, editor harga satuan daerah, dan unduhan file Excel akan muncul setelah kamu menekan "
+            "**Generate Gambar Kerja & RAB** di panel kiri."
+        )
+
+# === TAB 3: VALIDASI GEOMETRI & UJI AKURASI ===
+with tab_validasi:
+    hasil_cek = analisis_geometri_cepat(
+        data,
+        aktif_lebar,
+        aktif_panjang,
+        is_template=(mode == "template")
+    )
+    if hasil_cek:
+        v1, v2, v3, v4 = st.columns(4)
+        v1.metric("Segmen Dinding", f"{hasil_cek['jumlah_segmen']} Segmen")
+        v2.metric("Titik Kolom Struktur", f"{hasil_cek['jumlah_simpul']} Titik")
+        v3.metric("Total Panjang Dinding", f"{hasil_cek['total_panjang_m']:.2f} m")
+        v4.metric("Jumlah Bukaan", f"{hasil_cek['jumlah_bukaan']} Unit")
+
+        if hasil_cek["info_bentang"]:
+            st.info("**Optimasi Kolom Praktis Otomatis:**")
+            for msg in hasil_cek["info_bentang"]:
+                st.write(f"- {msg}")
+        else:
+            st.success("Seluruh bentang dinding berada pada jarak <= 3.50 m antar simpul kolom.")
+
+        with st.expander("Log Pengujian Kuantitatif & Benchmark Akurasi (16 Skenario Uji)"):
+            st.caption(
+                "Evaluasi kestabilan mesin geometri dan kalkulasi volume pada 16 variasi tipe rumah "
+                "(Tipe 30 hingga Tipe 90) dibandingkan perhitungan manual spreadsheet."
+            )
+            if Path("rumah.json").exists():
+                df_bench = jalankan_benchmark_16_skenario(Path("rumah.json").read_text(encoding="utf-8"))
+                st.dataframe(df_bench, hide_index=True, use_container_width=True)
+            else:
+                st.info("File template rumah.json diperlukan untuk menjalankan simulasi benchmark.")
+
+        with st.expander("Inspeksi Struktur Parameter JSON Aktif"):
+            st.json(hasil_cek["data_aktif"])

@@ -1,13 +1,15 @@
 """Volume dan RAB rumah dari model Rumah -> file Excel dengan rumus hidup (openpyxl).
 
-Harga satuan: HSPK dan HSD Edisi ke-2 Tahun 2024, kolom Kab. Magelang.
-Koefisien AHSP di bawah adalah koefisien umum (ASUMSI). Ganti dengan AHSP dari dosen/instansimu.
+Harga satuan basis: HSPK dan HSD Edisi ke-2 Tahun 2024, kolom Kab. Magelang.
+Mendukung penyesuaian Indeks Kemahalan Konstruksi (IKK) lintas kota dan override harga daerah.
 """
 import math
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+from shapely.geometry import LineString, MultiPoint, Point
 
 # kode: (uraian, satuan, harga Rp, sumber)
 HARGA = {
@@ -117,6 +119,66 @@ PEKERJAAN = [
 RASIO_BESI = 150.0   # kg besi per m3 beton (ASUMSI)
 
 
+def _hitung_jumlah_kolom(r) -> int:
+    """Menghitung jumlah titik kolom yang sinkron 100% dengan modul drawing/denah.py."""
+    titik_kolom: List[Tuple[float, float]] = []
+
+    def tambah_unik(x: float, y: float, tol: float = 15.0) -> None:
+        rx, ry = float(round(x)), float(round(y))
+        for ex, ey in titik_kolom:
+            if math.hypot(rx - ex, ry - ey) <= tol:
+                return
+        titik_kolom.append((rx, ry))
+
+    garis_dinding = []
+    for d in r.dinding:
+        tambah_unik(d.a[0], d.a[1])
+        tambah_unik(d.b[0], d.b[1])
+        garis_dinding.append((d, LineString([d.a, d.b])))
+
+    n_garis = len(garis_dinding)
+    for i in range(n_garis):
+        for j in range(i + 1, n_garis):
+            inter = garis_dinding[i][1].intersection(garis_dinding[j][1])
+            if inter.is_empty:
+                continue
+            if isinstance(inter, Point):
+                tambah_unik(inter.x, inter.y)
+            elif isinstance(inter, MultiPoint):
+                for pt in inter.geoms:
+                    tambah_unik(pt.x, pt.y)
+
+    bentang_maks = 3500.0
+    for d, garis in garis_dinding:
+        pjg = garis.length
+        if pjg > bentang_maks:
+            jumlah_bagi = math.ceil(pjg / bentang_maks)
+            dx = d.b[0] - d.a[0]
+            dy = d.b[1] - d.a[1]
+            for k in range(1, jumlah_bagi):
+                rasio = k / jumlah_bagi
+                jarak = pjg * rasio
+                menabrak = any(
+                    b.dinding == d.id and (b.offset - 180.0) <= jarak <= (b.akhir + 180.0)
+                    for b in r.bukaan
+                )
+                if not menabrak:
+                    tambah_unik(d.a[0] + dx * rasio, d.a[1] + dy * rasio, tol=250.0)
+
+    return max(4, len(titik_kolom))
+
+
+def _gabung_harga(harga_override: Optional[Dict[str, float]] = None) -> Dict[str, Tuple[str, str, float, str]]:
+    """Menggabungkan database HARGA bawaan dengan perubahan harga kustom dari pengguna."""
+    hasil = dict(HARGA)
+    if harga_override:
+        for kode, nilai_baru in harga_override.items():
+            if kode in hasil and nilai_baru is not None:
+                u, s, _, src = hasil[kode]
+                hasil[kode] = (u, s, float(nilai_baru), f"{src} (Kustom)")
+    return hasil
+
+
 def hitung_volume(r):
     """Hitung semua volume dari model Rumah. Kembalian: {kunci: (nilai, keterangan)}."""
     t = r.dinding_default.get("tebal", 150) / 1000
@@ -131,14 +193,13 @@ def hitung_volume(r):
     bs, hs = [v / 1000 for v in r.struktur.get("sloof", [150, 200])]
     kw, kh = [v / 1000 for v in r.struktur.get("kolom", [150, 150])]
     rw, rh = [v / 1000 for v in r.struktur.get("ring_balok", [150, 150])]
-    n_kolom = len({(round(p[0], 1), round(p[1], 1)) for d in r.dinding for p in (d.a, d.b)})
+    n_kolom = _hitung_jumlah_kolom(r)
 
     luas_bukaan = sum(b.lebar * b.tinggi for b in r.bukaan) / 1e6
     dinding_kotor = Lw * H
     dinding_bersih = dinding_kotor - luas_bukaan
     plester = 2 * dinding_bersih
 
-    # keramik dinding area basah
     k_dinding = 0.0
     for rg in r.ruang:
         if rg.keramik_dinding_tinggi:
@@ -164,7 +225,6 @@ def hitung_volume(r):
     beton = b_sloof + b_kolom + b_ring
     bekisting = Lw * 2 * hs + n_kolom * 4 * kw * H + Lw * (2 * rh + rw)
 
-    # atap pelana
     th = math.radians(r.atap.get("kemiringan_derajat", 30))
     ov = r.atap.get("overstek", 600) / 1000
     Wt, Dt = W + t, D + t
@@ -192,7 +252,7 @@ def hitung_volume(r):
         "pasir_lantai": (luas_lantai * 0.10, f"luas lantai bersih {luas_lantai:.2f} m2 x 0,10"),
         "lantai_kerja": (luas_lantai * 0.05, f"luas lantai bersih {luas_lantai:.2f} m2 x 0,05"),
         "beton_sloof": (b_sloof, f"{Lw:.2f} x {bs:.2f} x {hs:.2f}"),
-        "beton_kolom": (b_kolom, f"{n_kolom} kolom x {kw:.2f} x {kh:.2f} x {H:.2f}"),
+        "beton_kolom": (b_kolom, f"{n_kolom} titik kolom (sudut, simpang, bentang) x {kw:.2f} x {kh:.2f} x {H:.2f}"),
         "beton_ring": (b_ring, f"{Lw:.2f} x {rw:.2f} x {rh:.2f}"),
         "besi": (beton * RASIO_BESI, f"beton {beton:.3f} m3 x {RASIO_BESI:.0f} kg/m3 (asumsi)"),
         "bekisting": (bekisting, "sisi sloof + 4 sisi kolom + sisi dan alas ring balok"),
@@ -216,12 +276,19 @@ def hitung_volume(r):
     }
 
 
-def hitung_rab(r, overhead=0.12, ppn=0.11):
-    """Hitung RAB di Python (untuk ringkasan di aplikasi). Kembalian: (baris, rekap_divisi, total_dict)."""
+def hitung_rab(
+    r,
+    overhead: float = 0.12,
+    ppn: float = 0.11,
+    ikk: float = 1.0,
+    harga_override: Optional[Dict[str, float]] = None,
+):
+    """Hitung RAB dengan koefisien wilayah (IKK) dan harga satuan kustom opsional."""
     vol = hitung_volume(r)
+    harga_aktif = _gabung_harga(harga_override)
     baris, per_divisi = [], {}
     for kode, divisi, uraian, sat, kv, komp in PEKERJAAN:
-        hs = sum(k * HARGA[h][2] for h, k in komp)
+        hs = sum(k * round(harga_aktif[h][2] * ikk) for h, k in komp)
         v = vol[kv][0]
         baris.append((kode, divisi, uraian, sat, v, hs, v * hs))
         per_divisi[divisi] = per_divisi.get(divisi, 0) + v * hs
@@ -231,11 +298,21 @@ def hitung_rab(r, overhead=0.12, ppn=0.11):
     return baris, per_divisi, {"jumlah": jl, "overhead": oh, "ppn": pp, "total": jl + oh + pp}
 
 
-def buat_rab_excel(r, path="hasil/RAB_rumah.xlsx", overhead=0.12, ppn=0.11):
-    """Tulis Excel: sheet Harga Satuan, Volume, AHSP, RAB, Rekap (semua dengan rumus hidup)."""
+def buat_rab_excel(
+    r,
+    path="hasil/RAB_rumah.xlsx",
+    overhead: float = 0.12,
+    ppn: float = 0.11,
+    ikk: float = 1.0,
+    wilayah: str = "Kab. Magelang (Basis HSPK 2024)",
+    harga_override: Optional[Dict[str, float]] = None,
+):
+    """Tulis Excel: sheet Harga Satuan, Volume, AHSP, RAB, Rekap (semua dengan rumus hidup & IKK wilayah)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     vol = hitung_volume(r)
+    harga_aktif = _gabung_harga(harga_override)
+
     judul = Font(bold=True, color="FFFFFF")
     isi_judul = PatternFill("solid", fgColor="1F3A5F")
     isi_sub = PatternFill("solid", fgColor="DCE6F1")
@@ -244,7 +321,7 @@ def buat_rab_excel(r, path="hasil/RAB_rumah.xlsx", overhead=0.12, ppn=0.11):
 
     def header(ws, cols, widths):
         ws.append(cols)
-        for i, c in enumerate(ws[ws.max_row]):
+        for c in ws[ws.max_row]:
             c.font, c.fill = judul, isi_judul
             c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         for i, w in enumerate(widths):
@@ -252,14 +329,21 @@ def buat_rab_excel(r, path="hasil/RAB_rumah.xlsx", overhead=0.12, ppn=0.11):
         ws.freeze_panes = ws.cell(ws.max_row + 1, 1)
 
     wb = Workbook()
-    # 1. Harga Satuan
+    # 1. Harga Satuan (mengalikan Harga Basis dengan Indeks Wilayah di Rekap!B2)
     wh = wb.active
     wh.title = "Harga Satuan"
-    header(wh, ["Kode", "Uraian", "Satuan", "Harga (Rp)", "Sumber"], [20, 38, 10, 16, 30])
-    for kode, (u, s, h, src) in HARGA.items():
-        wh.append([kode, u, s, h, src])
-        wh.cell(wh.max_row, 4).number_format = RP
-        wh.cell(wh.max_row, 4).fill = isi_input
+    header(
+        wh,
+        ["Kode", "Uraian", "Satuan", "Harga Basis (Rp)", "Indeks Wilayah", "Harga Berlaku (Rp)", "Sumber"],
+        [20, 38, 10, 18, 15, 20, 30]
+    )
+    for kode, (u, s, h, src) in harga_aktif.items():
+        rr = wh.max_row + 1
+        wh.append([kode, u, s, h, "=Rekap!$B$2", f"=ROUND(D{rr}*E{rr},0)", src])
+        wh.cell(rr, 4).number_format = RP
+        wh.cell(rr, 4).fill = isi_input
+        wh.cell(rr, 5).number_format = "0.00"
+        wh.cell(rr, 6).number_format = RP
     n_h = wh.max_row
     cari = lambda kol, kode_cell: f"INDEX('Harga Satuan'!${kol}$2:${kol}${n_h},MATCH({kode_cell},'Harga Satuan'!$A$2:$A${n_h},0))"
 
@@ -284,7 +368,7 @@ def buat_rab_excel(r, path="hasil/RAB_rumah.xlsx", overhead=0.12, ppn=0.11):
         mulai = wa.max_row + 1
         for h, k in komp:
             rr = wa.max_row + 1
-            wa.append([h, f"={cari('B', f'A{rr}')}", f"={cari('C', f'A{rr}')}", k, f"={cari('D', f'A{rr}')}", f"=D{rr}*E{rr}"])
+            wa.append([h, f"={cari('B', f'A{rr}')}", f"={cari('C', f'A{rr}')}", k, f"={cari('F', f'A{rr}')}", f"=D{rr}*E{rr}"])
             wa.cell(rr, 4).fill = isi_input
             wa.cell(rr, 4).number_format = "0.0000"
             wa.cell(rr, 5).number_format = RP
@@ -307,15 +391,26 @@ def buat_rab_excel(r, path="hasil/RAB_rumah.xlsx", overhead=0.12, ppn=0.11):
         wr.cell(rr, 7).number_format = RP
     akhir_rab = wr.max_row
 
-    # 5. Rekap
+    # 5. Rekap (Baris 2 = Indeks Wilayah editable, Baris 3 = Nama Wilayah)
     wk = wb.create_sheet("Rekap")
-    header(wk, ["Divisi", "Jumlah (Rp)"], [40, 20])
+    header(wk, ["Parameter / Divisi Pekerjaan", "Nilai / Jumlah (Rp)"], [44, 24])
+    wk.append(["Indeks Kemahalan Konstruksi (IKK)", float(ikk)])
+    wk.cell(2, 2).number_format = "0.00"
+    wk.cell(2, 2).fill = isi_input
+    wk.cell(2, 2).font = Font(bold=True)
+
+    wk.append(["Wilayah Acuan Harga", wilayah])
+    wk.cell(3, 2).font = Font(bold=True)
+    wk.append([])
+
+    a = wk.max_row + 1  # Baris 5
     divisi_unik = list(dict.fromkeys(p[1] for p in PEKERJAAN))
     for dv in divisi_unik:
         rr = wk.max_row + 1
         wk.append([dv, f"=SUMIF(RAB!$B$2:$B${akhir_rab},A{rr},RAB!$G$2:$G${akhir_rab})"])
         wk.cell(rr, 2).number_format = RP
-    a, b = 2, wk.max_row
+    b = wk.max_row
+
     wk.append(["Jumlah pekerjaan", f"=SUM(B{a}:B{b})"])
     r_jml = wk.max_row
     wk.append(["Persen overhead dan keuntungan", overhead])
@@ -338,7 +433,7 @@ def buat_rab_excel(r, path="hasil/RAB_rumah.xlsx", overhead=0.12, ppn=0.11):
         for c in wk[rr]:
             c.font = Font(bold=True)
     wk.append([])
-    wk.append(["Catatan: harga satuan dari HSPK/HSD Kab. Magelang 2024. Koefisien dan item bertanda ASUMSI bisa diubah (sel kuning)."])
+    wk.append(["Catatan: Basis harga dari HSPK/HSD Kab. Magelang 2024 dikalikan IKK Wilayah (sel kuning Rekap!B2). Seluruh sel kuning dapat diubah."])
 
     wb.calculation.fullCalcOnLoad = True
     wb.save(path)
