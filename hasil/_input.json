@@ -69,23 +69,23 @@
     {
       "id": "I1a",
       "a": [
-        3000,
+        3000.0,
         0.0
       ],
       "b": [
-        3000,
-        3000
+        3000.0,
+        3000.0
       ],
       "tipe": "dalam"
     },
     {
       "id": "I1b",
       "a": [
-        3000,
-        3000
+        3000.0,
+        3000.0
       ],
       "b": [
-        3000,
+        3000.0,
         6000.0
       ],
       "tipe": "dalam"
@@ -94,46 +94,46 @@
       "id": "I2",
       "a": [
         0.0,
-        3000
+        3000.0
       ],
       "b": [
-        3000,
-        3000
+        3000.0,
+        3000.0
       ],
       "tipe": "dalam"
     },
     {
       "id": "I3",
       "a": [
-        3000,
-        3000
+        3000.0,
+        3000.0
       ],
       "b": [
         6000.0,
-        3000
+        3000.0
       ],
       "tipe": "dalam"
     },
     {
       "id": "I4",
       "a": [
-        3000,
-        4500
+        3000.0,
+        4500.0
       ],
       "b": [
         6000.0,
-        4500
+        4500.0
       ],
       "tipe": "dalam"
     },
     {
       "id": "I5",
       "a": [
-        4500,
-        4500
+        4500.0,
+        4500.0
       ],
       "b": [
-        4500,
+        4500.0,
         6000.0
       ],
       "tipe": "dalam"
@@ -144,7 +144,7 @@
       "id": "D1",
       "jenis": "pintu",
       "dinding": "W1",
-      "offset": 3900,
+      "offset": 3900.0,
       "lebar": 900.0,
       "tinggi": 2100,
       "ambang": 0,
@@ -156,7 +156,7 @@
       "id": "D2",
       "jenis": "pintu",
       "dinding": "I1a",
-      "offset": 2000,
+      "offset": 2000.0,
       "lebar": 800.0,
       "tinggi": 2100,
       "ambang": 0,
@@ -168,7 +168,7 @@
       "id": "D3",
       "jenis": "pintu",
       "dinding": "I1b",
-      "offset": 200.0,
+      "offset": 600.0,
       "lebar": 800.0,
       "tinggi": 2100,
       "ambang": 0,
@@ -180,7 +180,7 @@
       "id": "D4",
       "jenis": "pintu",
       "dinding": "I4",
-      "offset": 200.0,
+      "offset": 300.0,
       "lebar": 800.0,
       "tinggi": 2100,
       "ambang": 0,
@@ -192,7 +192,7 @@
       "id": "D5",
       "jenis": "pintu",
       "dinding": "I4",
-      "offset": 1700,
+      "offset": 1700.0,
       "lebar": 800.0,
       "tinggi": 2100,
       "ambang": 0,
@@ -204,7 +204,7 @@
       "id": "D6",
       "jenis": "pintu",
       "dinding": "W3",
-      "offset": 4700,
+      "offset": 4700.0,
       "lebar": 900.0,
       "tinggi": 2100,
       "ambang": 0,
@@ -217,7 +217,7 @@
       "jenis": "bukaan",
       "dinding": "I3",
       "offset": 200.0,
-      "lebar": 1800,
+      "lebar": 1500.0,
       "tinggi": 2100,
       "ambang": 0
     },
@@ -225,7 +225,7 @@
       "id": "J1",
       "jenis": "jendela",
       "dinding": "W1",
-      "offset": 900,
+      "offset": 900.0,
       "lebar": 1200.0,
       "tinggi": 1200,
       "ambang": 900,
@@ -235,7 +235,7 @@
       "id": "J2",
       "jenis": "jendela",
       "dinding": "W4",
-      "offset": 900,
+      "offset": 900.0,
       "lebar": 1200.0,
       "tinggi": 1200,
       "ambang": 900,
@@ -245,7 +245,7 @@
       "id": "J3",
       "jenis": "jendela",
       "dinding": "W4",
-      "offset": 3900,
+      "offset": 3900.0,
       "lebar": 1200.0,
       "tinggi": 1200,
       "ambang": 900,
@@ -255,7 +255,7 @@
       "id": "J4",
       "jenis": "jendela",
       "dinding": "W2",
-      "offset": 900,
+      "offset": 900.0,
       "lebar": 1200.0,
       "tinggi": 1200,
       "ambang": 900,
@@ -265,7 +265,7 @@
       "id": "J5",
       "jenis": "jendela",
       "dinding": "W2",
-      "offset": 3250,
+      "offset": 3300.0,
       "lebar": 1000.0,
       "tinggi": 1200,
       "ambang": 900,
@@ -275,7 +275,7 @@
       "id": "J6",
       "jenis": "jendela",
       "dinding": "W3",
-      "offset": 1950,
+      "offset": 1700.0,
       "lebar": 600.0,
       "tinggi": 600,
       "ambang": 1500,
@@ -285,7 +285,7 @@
       "id": "J7",
       "jenis": "jendela",
       "dinding": "W3",
-      "offset": 450,
+      "offset": 600.0,
       "lebar": 600.0,
       "tinggi": 600,
       "ambang": 1500,
@@ -298,8 +298,8 @@
       "kotak": [
         0.0,
         0.0,
-        3000,
-        3000
+        3000.0,
+        3000.0
       ],
       "lantai": "keramik 40x40",
       "plafon": "gypsum 9 mm"
@@ -307,10 +307,10 @@
     {
       "nama": "Ruang Tamu",
       "kotak": [
-        3000,
+        3000.0,
         0.0,
         6000.0,
-        3000
+        3000.0
       ],
       "lantai": "keramik 40x40",
       "plafon": "gypsum 9 mm"
@@ -319,8 +319,8 @@
       "nama": "Kamar Tidur 2",
       "kotak": [
         0.0,
-        3000,
-        3000,
+        3000.0,
+        3000.0,
         6000.0
       ],
       "lantai": "keramik 40x40",
@@ -329,10 +329,10 @@
     {
       "nama": "Dapur",
       "kotak": [
-        3000,
-        3000,
+        3000.0,
+        3000.0,
         6000.0,
-        4500
+        4500.0
       ],
       "lantai": "keramik 40x40",
       "plafon": "gypsum 9 mm"
@@ -340,9 +340,9 @@
     {
       "nama": "KM",
       "kotak": [
-        3000,
-        4500,
-        4500,
+        3000.0,
+        4500.0,
+        4500.0,
         6000.0
       ],
       "lantai": "keramik 20x20",
@@ -352,8 +352,8 @@
     {
       "nama": "R. Cuci",
       "kotak": [
-        4500,
-        4500,
+        4500.0,
+        4500.0,
         6000.0,
         6000.0
       ],
@@ -394,13 +394,13 @@
     {
       "nama": "A-A",
       "arah": "x",
-      "posisi": 1500,
+      "posisi": 1500.0,
       "lihat": "utara"
     },
     {
       "nama": "B-B",
       "arah": "y",
-      "posisi": 4200,
+      "posisi": 4000.0,
       "lihat": "timur"
     }
   ]

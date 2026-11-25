@@ -16,46 +16,358 @@
     "finishing": "plester, aci, cat"
   },
   "dinding": [
-    {"id": "W1", "a": [0, 0], "b": [6000, 0], "tipe": "luar"},
-    {"id": "W2", "a": [6000, 0], "b": [6000, 6000], "tipe": "luar"},
-    {"id": "W3", "a": [6000, 6000], "b": [0, 6000], "tipe": "luar"},
-    {"id": "W4", "a": [0, 6000], "b": [0, 0], "tipe": "luar"},
-    {"id": "I1a", "a": [3000, 0], "b": [3000, 3000], "tipe": "dalam"},
-    {"id": "I1b", "a": [3000, 3000], "b": [3000, 6000], "tipe": "dalam"},
-    {"id": "I2", "a": [0, 3000], "b": [3000, 3000], "tipe": "dalam"},
-    {"id": "I3", "a": [3000, 3000], "b": [6000, 3000], "tipe": "dalam"},
-    {"id": "I4", "a": [3000, 4500], "b": [6000, 4500], "tipe": "dalam"},
-    {"id": "I5", "a": [4500, 4500], "b": [4500, 6000], "tipe": "dalam"}
+    {
+      "id": "W1",
+      "a": [
+        0,
+        0
+      ],
+      "b": [
+        6000,
+        0
+      ],
+      "tipe": "luar"
+    },
+    {
+      "id": "W2",
+      "a": [
+        6000,
+        0
+      ],
+      "b": [
+        6000,
+        6000
+      ],
+      "tipe": "luar"
+    },
+    {
+      "id": "W3",
+      "a": [
+        6000,
+        6000
+      ],
+      "b": [
+        0,
+        6000
+      ],
+      "tipe": "luar"
+    },
+    {
+      "id": "W4",
+      "a": [
+        0,
+        6000
+      ],
+      "b": [
+        0,
+        0
+      ],
+      "tipe": "luar"
+    },
+    {
+      "id": "I1a",
+      "a": [
+        3000,
+        0
+      ],
+      "b": [
+        3000,
+        3000
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I1b",
+      "a": [
+        3000,
+        3000
+      ],
+      "b": [
+        3000,
+        6000
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I2",
+      "a": [
+        0,
+        3000
+      ],
+      "b": [
+        3000,
+        3000
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I3",
+      "a": [
+        3000,
+        3000
+      ],
+      "b": [
+        6000,
+        3000
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I4",
+      "a": [
+        3000,
+        4500
+      ],
+      "b": [
+        6000,
+        4500
+      ],
+      "tipe": "dalam"
+    },
+    {
+      "id": "I5",
+      "a": [
+        4500,
+        4500
+      ],
+      "b": [
+        4500,
+        6000
+      ],
+      "tipe": "dalam"
+    }
   ],
   "bukaan": [
-    {"id": "D1", "jenis": "pintu", "dinding": "W1", "offset": 3900, "lebar": 900, "tinggi": 2100, "ambang": 0, "ayun_ke": "Ruang Tamu", "engsel": "awal", "bahan": "kusen kayu, daun panel"},
-    {"id": "D2", "jenis": "pintu", "dinding": "I1a", "offset": 2000, "lebar": 800, "tinggi": 2100, "ambang": 0, "ayun_ke": "Kamar Tidur 1", "engsel": "akhir", "bahan": "kusen kayu, daun panel"},
-    {"id": "D3", "jenis": "pintu", "dinding": "I1b", "offset": 600, "lebar": 800, "tinggi": 2100, "ambang": 0, "ayun_ke": "Kamar Tidur 2", "engsel": "awal", "bahan": "kusen kayu, daun panel"},
-    {"id": "D4", "jenis": "pintu", "dinding": "I4", "offset": 300, "lebar": 800, "tinggi": 2100, "ambang": 0, "ayun_ke": "KM", "engsel": "awal", "bahan": "kusen kayu, daun PVC"},
-    {"id": "D5", "jenis": "pintu", "dinding": "I4", "offset": 1700, "lebar": 800, "tinggi": 2100, "ambang": 0, "ayun_ke": "R. Cuci", "engsel": "awal", "bahan": "kusen kayu, daun PVC"},
-    {"id": "D6", "jenis": "pintu", "dinding": "W3", "offset": 4700, "lebar": 900, "tinggi": 2100, "ambang": 0, "ayun_ke": "Halaman Belakang", "engsel": "awal", "bahan": "kusen kayu, daun panel"},
-    {"id": "B1", "jenis": "bukaan", "dinding": "I3", "offset": 200, "lebar": 1500, "tinggi": 2100, "ambang": 0},
-    {"id": "J1", "jenis": "jendela", "dinding": "W1", "offset": 900, "lebar": 1200, "tinggi": 1200, "ambang": 900, "bahan": "kusen aluminium, kaca 5 mm"},
-    {"id": "J2", "jenis": "jendela", "dinding": "W4", "offset": 900, "lebar": 1200, "tinggi": 1200, "ambang": 900, "bahan": "kusen aluminium, kaca 5 mm"},
-    {"id": "J3", "jenis": "jendela", "dinding": "W4", "offset": 3900, "lebar": 1200, "tinggi": 1200, "ambang": 900, "bahan": "kusen aluminium, kaca 5 mm"},
-    {"id": "J4", "jenis": "jendela", "dinding": "W2", "offset": 900, "lebar": 1200, "tinggi": 1200, "ambang": 900, "bahan": "kusen aluminium, kaca 5 mm"},
-    {"id": "J5", "jenis": "jendela", "dinding": "W2", "offset": 3300, "lebar": 1000, "tinggi": 1200, "ambang": 900, "bahan": "kusen aluminium, kaca 5 mm"},
-    {"id": "J6", "jenis": "jendela", "dinding": "W3", "offset": 1700, "lebar": 600, "tinggi": 600, "ambang": 1500, "bahan": "kusen aluminium, kaca nako"},
-    {"id": "J7", "jenis": "jendela", "dinding": "W3", "offset": 600, "lebar": 600, "tinggi": 600, "ambang": 1500, "bahan": "kusen aluminium, kaca nako"}
+    {
+      "id": "D1",
+      "jenis": "pintu",
+      "dinding": "W1",
+      "offset": 3900,
+      "lebar": 900,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "Ruang Tamu",
+      "engsel": "awal",
+      "bahan": "kusen kayu, daun panel"
+    },
+    {
+      "id": "D2",
+      "jenis": "pintu",
+      "dinding": "I1a",
+      "offset": 2000,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "Kamar Tidur 1",
+      "engsel": "akhir",
+      "bahan": "kusen kayu, daun panel"
+    },
+    {
+      "id": "D3",
+      "jenis": "pintu",
+      "dinding": "I1b",
+      "offset": 600,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "Kamar Tidur 2",
+      "engsel": "awal",
+      "bahan": "kusen kayu, daun panel"
+    },
+    {
+      "id": "D4",
+      "jenis": "pintu",
+      "dinding": "I4",
+      "offset": 300,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "KM",
+      "engsel": "awal",
+      "bahan": "kusen kayu, daun PVC"
+    },
+    {
+      "id": "D5",
+      "jenis": "pintu",
+      "dinding": "I4",
+      "offset": 1700,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "R. Cuci",
+      "engsel": "awal",
+      "bahan": "kusen kayu, daun PVC"
+    },
+    {
+      "id": "D6",
+      "jenis": "pintu",
+      "dinding": "W3",
+      "offset": 350,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0,
+      "ayun_ke": "Halaman Belakang",
+      "engsel": "awal",
+      "bahan": "kusen kayu, daun panel"
+    },
+    {
+      "id": "B1",
+      "jenis": "bukaan",
+      "dinding": "I3",
+      "offset": 200,
+      "lebar": 1500,
+      "tinggi": 2100,
+      "ambang": 0
+    },
+    {
+      "id": "J1",
+      "jenis": "jendela",
+      "dinding": "W1",
+      "offset": 900,
+      "lebar": 1200,
+      "tinggi": 1200,
+      "ambang": 900,
+      "bahan": "kusen aluminium, kaca 5 mm"
+    },
+    {
+      "id": "J2",
+      "jenis": "jendela",
+      "dinding": "W4",
+      "offset": 900,
+      "lebar": 1200,
+      "tinggi": 1200,
+      "ambang": 900,
+      "bahan": "kusen aluminium, kaca 5 mm"
+    },
+    {
+      "id": "J3",
+      "jenis": "jendela",
+      "dinding": "W4",
+      "offset": 3900,
+      "lebar": 1200,
+      "tinggi": 1200,
+      "ambang": 900,
+      "bahan": "kusen aluminium, kaca 5 mm"
+    },
+    {
+      "id": "J4",
+      "jenis": "jendela",
+      "dinding": "W2",
+      "offset": 900,
+      "lebar": 1200,
+      "tinggi": 1200,
+      "ambang": 900,
+      "bahan": "kusen aluminium, kaca 5 mm"
+    },
+    {
+      "id": "J5",
+      "jenis": "jendela",
+      "dinding": "W2",
+      "offset": 3300,
+      "lebar": 1000,
+      "tinggi": 1200,
+      "ambang": 900,
+      "bahan": "kusen aluminium, kaca 5 mm"
+    },
+    {
+      "id": "J6",
+      "jenis": "jendela",
+      "dinding": "W3",
+      "offset": 1950,
+      "lebar": 600,
+      "tinggi": 600,
+      "ambang": 1500,
+      "bahan": "kusen aluminium, kaca nako"
+    }
   ],
   "ruang": [
-    {"nama": "Kamar Tidur 1", "kotak": [0, 0, 3000, 3000], "lantai": "keramik 40x40", "plafon": "gypsum 9 mm"},
-    {"nama": "Ruang Tamu", "kotak": [3000, 0, 6000, 3000], "lantai": "keramik 40x40", "plafon": "gypsum 9 mm"},
-    {"nama": "Kamar Tidur 2", "kotak": [0, 3000, 3000, 6000], "lantai": "keramik 40x40", "plafon": "gypsum 9 mm"},
-    {"nama": "Dapur", "kotak": [3000, 3000, 6000, 4500], "lantai": "keramik 40x40", "plafon": "gypsum 9 mm"},
-    {"nama": "KM", "kotak": [3000, 4500, 4500, 6000], "lantai": "keramik 20x20", "plafon": "gypsum 9 mm", "keramik_dinding_tinggi": 1500},
-    {"nama": "R. Cuci", "kotak": [4500, 4500, 6000, 6000], "lantai": "keramik 20x20", "plafon": "gypsum 9 mm"}
+    {
+      "nama": "Kamar Tidur 1",
+      "kotak": [
+        0,
+        0,
+        3000,
+        3000
+      ],
+      "lantai": "keramik 40x40",
+      "plafon": "gypsum 9 mm"
+    },
+    {
+      "nama": "Ruang Tamu",
+      "kotak": [
+        3000,
+        0,
+        6000,
+        3000
+      ],
+      "lantai": "keramik 40x40",
+      "plafon": "gypsum 9 mm"
+    },
+    {
+      "nama": "Kamar Tidur 2",
+      "kotak": [
+        0,
+        3000,
+        3000,
+        6000
+      ],
+      "lantai": "keramik 40x40",
+      "plafon": "gypsum 9 mm"
+    },
+    {
+      "nama": "Dapur",
+      "kotak": [
+        3000,
+        3000,
+        6000,
+        4500
+      ],
+      "lantai": "keramik 40x40",
+      "plafon": "gypsum 9 mm"
+    },
+    {
+      "nama": "KM",
+      "kotak": [
+        3000,
+        4500,
+        4500,
+        6000
+      ],
+      "lantai": "keramik 20x20",
+      "plafon": "gypsum 9 mm",
+      "keramik_dinding_tinggi": 1500
+    },
+    {
+      "nama": "R. Cuci",
+      "kotak": [
+        4500,
+        4500,
+        6000,
+        6000
+      ],
+      "lantai": "keramik 20x20",
+      "plafon": "gypsum 9 mm"
+    }
   ],
   "struktur": {
-    "pondasi": {"jenis": "batu kali", "lebar_bawah": 600, "lebar_atas": 300, "tinggi": 700},
-    "sloof": [150, 200],
-    "kolom": [150, 150],
-    "ring_balok": [150, 150],
+    "pondasi": {
+      "jenis": "batu kali",
+      "lebar_bawah": 600,
+      "lebar_atas": 300,
+      "tinggi": 700
+    },
+    "sloof": [
+      150,
+      200
+    ],
+    "kolom": [
+      150,
+      150
+    ],
+    "ring_balok": [
+      150,
+      150
+    ],
     "jarak_kolom_maks": 3000
   },
   "atap": {
@@ -67,7 +379,17 @@
     "rangka": "baja ringan"
   },
   "potongan": [
-    {"nama": "A-A", "arah": "x", "posisi": 1500, "lihat": "utara"},
-    {"nama": "B-B", "arah": "y", "posisi": 4000, "lihat": "timur"}
+    {
+      "nama": "A-A",
+      "arah": "x",
+      "posisi": 1500,
+      "lihat": "utara"
+    },
+    {
+      "nama": "B-B",
+      "arah": "y",
+      "posisi": 4000,
+      "lihat": "timur"
+    }
   ]
 }

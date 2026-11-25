@@ -1,0 +1,545 @@
+{
+  "proyek": {
+    "nama": "Rumah Tinggal 2 Lantai",
+    "lokasi": "Kota Semarang"
+  },
+  "satuan": "mm",
+  "jumlah_lantai": 2,
+  "lantai": {
+    "elevasi": 0,
+    "tinggi_dinding": 3400,
+    "tinggi_plafon": 3000
+  },
+  "lantai_2": {
+    "elevasi": 3400,
+    "tinggi_dinding": 3200,
+    "tinggi_plafon": 2900
+  },
+  "dinding_default": {
+    "tebal": 150,
+    "bahan": "bata merah 1:4"
+  },
+  "dinding": [
+    {
+      "id": "D1",
+      "a": [
+        0,
+        0
+      ],
+      "b": [
+        6000,
+        0
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D2",
+      "a": [
+        6000,
+        0
+      ],
+      "b": [
+        6000,
+        8000
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D3",
+      "a": [
+        6000,
+        8000
+      ],
+      "b": [
+        0,
+        8000
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D4",
+      "a": [
+        0,
+        8000
+      ],
+      "b": [
+        0,
+        0
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D5",
+      "a": [
+        3000,
+        0
+      ],
+      "b": [
+        3000,
+        8000
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D6",
+      "a": [
+        0,
+        3500
+      ],
+      "b": [
+        3000,
+        3500
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D7",
+      "a": [
+        3000,
+        2600
+      ],
+      "b": [
+        6000,
+        2600
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D8",
+      "a": [
+        4500,
+        6200
+      ],
+      "b": [
+        6000,
+        6200
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D9",
+      "a": [
+        4500,
+        6200
+      ],
+      "b": [
+        4500,
+        8000
+      ],
+      "tebal": 150
+    }
+  ],
+  "bukaan": [
+    {
+      "id": "P1",
+      "dinding": "D1",
+      "jenis": "pintu",
+      "offset": 1100,
+      "lebar": 900,
+      "tinggi": 2100,
+      "ambang": 0
+    },
+    {
+      "id": "J1",
+      "dinding": "D1",
+      "jenis": "jendela",
+      "offset": 3700,
+      "lebar": 1400,
+      "tinggi": 1400,
+      "ambang": 700
+    },
+    {
+      "id": "P2",
+      "dinding": "D5",
+      "jenis": "pintu",
+      "offset": 600,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0
+    },
+    {
+      "id": "P3",
+      "dinding": "D6",
+      "jenis": "pintu",
+      "offset": 1800,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0
+    },
+    {
+      "id": "P4",
+      "dinding": "D5",
+      "jenis": "pintu",
+      "offset": 4000,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0
+    },
+    {
+      "id": "P5",
+      "dinding": "D8",
+      "jenis": "pintu",
+      "offset": 350,
+      "lebar": 700,
+      "tinggi": 2000,
+      "ambang": 0
+    },
+    {
+      "id": "J2",
+      "dinding": "D3",
+      "jenis": "jendela",
+      "offset": 1000,
+      "lebar": 1200,
+      "tinggi": 1300,
+      "ambang": 800
+    },
+    {
+      "id": "J3",
+      "dinding": "D3",
+      "jenis": "jendela",
+      "offset": 3600,
+      "lebar": 1200,
+      "tinggi": 1300,
+      "ambang": 800
+    }
+  ],
+  "ruang": [
+    {
+      "id": "R1",
+      "nama": "Ruang Tamu",
+      "kotak": [
+        0,
+        0,
+        3000,
+        3500
+      ]
+    },
+    {
+      "id": "R2",
+      "nama": "R. Keluarga & Makan",
+      "kotak": [
+        0,
+        3500,
+        3000,
+        8000
+      ]
+    },
+    {
+      "id": "R3",
+      "nama": "Kamar Tidur 1",
+      "kotak": [
+        3000,
+        0,
+        6000,
+        2600
+      ]
+    },
+    {
+      "id": "R4",
+      "nama": "Dapur",
+      "kotak": [
+        3000,
+        6200,
+        4500,
+        8000
+      ]
+    },
+    {
+      "id": "R5",
+      "nama": "KM / WC Lt.1",
+      "kotak": [
+        4500,
+        6200,
+        6000,
+        8000
+      ]
+    }
+  ],
+  "dinding_lt2": [
+    {
+      "id": "D2_1",
+      "a": [
+        0,
+        1500
+      ],
+      "b": [
+        3000,
+        1500
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D2_1B",
+      "a": [
+        3000,
+        0
+      ],
+      "b": [
+        6000,
+        0
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D2_2",
+      "a": [
+        6000,
+        0
+      ],
+      "b": [
+        6000,
+        8000
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D2_3",
+      "a": [
+        6000,
+        8000
+      ],
+      "b": [
+        0,
+        8000
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D2_4",
+      "a": [
+        0,
+        8000
+      ],
+      "b": [
+        0,
+        1500
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D2_5",
+      "a": [
+        3000,
+        0
+      ],
+      "b": [
+        3000,
+        8000
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D2_6",
+      "a": [
+        0,
+        4800
+      ],
+      "b": [
+        3000,
+        4800
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D2_KTA",
+      "a": [
+        3000,
+        2600
+      ],
+      "b": [
+        6000,
+        2600
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D2_7",
+      "a": [
+        4500,
+        6200
+      ],
+      "b": [
+        6000,
+        6200
+      ],
+      "tebal": 150
+    },
+    {
+      "id": "D2_8",
+      "a": [
+        4500,
+        6200
+      ],
+      "b": [
+        4500,
+        8000
+      ],
+      "tebal": 150
+    }
+  ],
+  "bukaan_lt2": [
+    {
+      "id": "P2_1",
+      "dinding": "D2_1",
+      "jenis": "pintu",
+      "offset": 1100,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0
+    },
+    {
+      "id": "J2_1",
+      "dinding": "D2_1B",
+      "jenis": "jendela",
+      "offset": 800,
+      "lebar": 1400,
+      "tinggi": 1400,
+      "ambang": 700
+    },
+    {
+      "id": "P2_2",
+      "dinding": "D2_5",
+      "jenis": "pintu",
+      "offset": 3300,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0
+    },
+    {
+      "id": "P2_3",
+      "dinding": "D2_5",
+      "jenis": "pintu",
+      "offset": 5600,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0
+    },
+    {
+      "id": "P2_KTA",
+      "dinding": "D2_KTA",
+      "jenis": "pintu",
+      "offset": 200,
+      "lebar": 800,
+      "tinggi": 2100,
+      "ambang": 0
+    },
+    {
+      "id": "P2_4",
+      "dinding": "D2_8",
+      "jenis": "pintu",
+      "offset": 550,
+      "lebar": 700,
+      "tinggi": 2000,
+      "ambang": 0
+    },
+    {
+      "id": "J2_2",
+      "dinding": "D2_3",
+      "jenis": "jendela",
+      "offset": 1000,
+      "lebar": 1200,
+      "tinggi": 1300,
+      "ambang": 800
+    },
+    {
+      "id": "J2_3",
+      "dinding": "D2_3",
+      "jenis": "jendela",
+      "offset": 3600,
+      "lebar": 1200,
+      "tinggi": 1300,
+      "ambang": 800
+    }
+  ],
+  "ruang_lt2": [
+    {
+      "id": "R2_1",
+      "nama": "R. Keluarga Lt.2",
+      "kotak": [
+        0,
+        1500,
+        3000,
+        4800
+      ]
+    },
+    {
+      "id": "R2_2",
+      "nama": "Kamar Tidur Utama",
+      "kotak": [
+        0,
+        4800,
+        3000,
+        8000
+      ]
+    },
+    {
+      "id": "R2_3",
+      "nama": "Kamar Tidur Anak",
+      "kotak": [
+        3000,
+        0,
+        6000,
+        2600
+      ]
+    },
+    {
+      "id": "R2_4",
+      "nama": "KM / WC Lt.2",
+      "kotak": [
+        4500,
+        6200,
+        6000,
+        8000
+      ]
+    }
+  ],
+  "tangga": {
+    "id": "TG1",
+    "bentuk": "L",
+    "asal": [
+      5100,
+      2700
+    ],
+    "lebar": 900,
+    "jumlah_anak_tangga": 15,
+    "antrade": 225,
+    "optrade": 226.7,
+    "arah_naik": "utara",
+    "belok": "kiri",
+    "panjang_leg1": 1800,
+    "panjang_leg2": 1200
+  },
+  "void": [
+    {
+      "kotak": [
+        3900,
+        2700,
+        5925,
+        4500
+      ]
+    }
+  ],
+  "balkon": [
+    {
+      "nama": "Balkon Depan",
+      "kotak": [
+        0,
+        0,
+        3000,
+        1500
+      ]
+    }
+  ],
+  "potongan": [
+    {
+      "nama": "A-A",
+      "arah": "x",
+      "posisi": 4200
+    },
+    {
+      "nama": "B-B",
+      "arah": "y",
+      "posisi": 4200
+    }
+  ]
+}

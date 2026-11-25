@@ -1,915 +1,643 @@
-"""Potongan dan tampak rumah (DXF & PDF) dari model Rumah, memakai ezdxf.
-
-Fungsi utama:
-- ekspor_gambar_lengkap(rumah, path, ...) -> mengekspor Denah, Potongan, 4 Tampak,
-  dan Detail Pondasi/Kusen dengan skala otomatis proporsional di atas kertas A3.
-- ekspor_paket_pdf(path_dxf, daerah, path_pdf) -> merender seluruh lembar A3 ke PDF.
+"""
+Modul Gambar Potongan Arsitektural & Struktur (Potongan A-A & B-B)
+serta Gambar 4 Sisi Tampak (Depan, Belakang, Kanan, Kiri) yang proporsional dan estetis.
 """
 import math
-from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import ezdxf
-import matplotlib.pyplot as plt
-from ezdxf.addons.drawing import Frontend, RenderContext
-from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
 from ezdxf.enums import TextEntityAlignment as TA
-from matplotlib.backends.backend_pdf import PdfPages
-
-from drawing.denah import gambar_denah
-from drawing.detail import gambar_lembar_detail
-from drawing.kop import gambar_kop_a3, pilih_skala_otomatis
-
-DIM = "ARCH_100"          # gaya dimensi dari denah.py
-TINGGI_TEKS = 130
 
 
-# ----------------------------------------------------------------- bantu
-def _layer(doc):
-    daftar = [
-        ("A-SECT-WALL", 7), ("S-BETON", 6), ("S-PONDASI", 8), ("A-ROOF", 30),
-        ("A-ELEV", 7), ("A-GROUND", 94), ("A-ANNO-LEVL", 3), ("A-WALL-PATT", 8),
-        ("A-GLAZ", 4), ("A-DOOR", 1), ("A-ANNO-DIMS", 1), ("A-ANNO-TEXT", 2),
-        ("ATAP_DETAIL", 140),
-        ("KUSEN_POTONGAN", 1),
-        ("EKSTERIOR", 8),
-        ("ORNAMEN_FASAD", 2),
+def _siapkan_layer_potongan(doc: ezdxf.document.Drawing) -> None:
+    layers = [
+        ("A-WALL", 6),
+        ("A-WALL-PATT", 8),
+        ("S-COLS", 1),
+        ("S-FNDN", 4),
+        ("A-ROOF", 30),
+        ("A-ROOF-PATT", 8),
+        ("A-DOOR", 1),
+        ("A-GLAZ", 4),
+        ("A-FLOR-STRS", 3),
+        ("A-FURN", 30),
+        ("A-ANNO-DIMS", 3),
+        ("A-ANNO-TEXT", 2),
+        ("A-ANNO-SYMB", 7),
     ]
-    for nama, warna in daftar:
+    for nama, warna in layers:
         if nama not in doc.layers:
             doc.layers.add(nama, color=warna)
 
 
-def _poly(msp, pts, layer, tutup=True):
-    return msp.add_lwpolyline(pts, close=tutup, dxfattribs={"layer": layer})
+def _poly(msp, pts: Sequence[Tuple[float, float]], layer: str, tutup: bool = True, color: Optional[int] = None):
+    attr: Dict[str, object] = {"layer": layer}
+    if color is not None:
+        attr["color"] = color
+    return msp.add_lwpolyline(list(pts), close=tutup, dxfattribs=attr)
 
 
-def _garis(msp, p1, p2, layer="A-ANNO-TEXT"):
-    return msp.add_line(p1, p2, dxfattribs={"layer": layer})
+def _garis(msp, p1: Tuple[float, float], p2: Tuple[float, float], layer: str, color: Optional[int] = None):
+    attr: Dict[str, object] = {"layer": layer}
+    if color is not None:
+        attr["color"] = color
+    return msp.add_line(p1, p2, dxfattribs=attr)
 
 
-def _arsir(msp, pts, pola, skala, layer, sudut=0):
-    h = msp.add_hatch(color=256, dxfattribs={"layer": layer})
-    if str(pola).upper() == "SOLID":
+def _arsir(msp, pts: Sequence[Tuple[float, float]], pola: str, skala: float, layer: str, color: int = 256):
+    if len(pts) < 3:
+        return
+    h = msp.add_hatch(color=color, dxfattribs={"layer": layer})
+    if pola.upper() == "SOLID":
         h.set_solid_fill()
     else:
-        h.set_pattern_fill(pola, scale=skala, angle=sudut)
-    h.paths.add_polyline_path(pts, is_closed=True)
+        try:
+            h.set_pattern_fill(pola, scale=skala)
+        except Exception:
+            h.set_pattern_fill("ANSI31", scale=skala)
+    h.paths.add_polyline_path(list(pts), is_closed=True)
 
 
-def _teks(msp, isi, pos, tinggi=TINGGI_TEKS, rata=TA.LEFT, layer="A-ANNO-TEXT"):
-    msp.add_text(isi, height=tinggi, dxfattribs={"layer": layer}).set_placement(pos, align=rata)
+def _teks(msp, isi: str, pos: Tuple[float, float], tinggi: float = 100.0, rata=TA.MIDDLE_CENTER, layer: str = "A-ANNO-TEXT", rotasi: float = 0.0, color: Optional[int] = None):
+    style_name = "KOP_FONT" if "KOP_FONT" in msp.doc.styles else "Standard"
+    attr: Dict[str, object] = {"layer": layer, "style": style_name, "rotation": rotasi}
+    if color is not None:
+        attr["color"] = color
+    msp.add_text(isi, height=tinggi, dxfattribs=attr).set_placement(pos, align=rata)
 
 
-def _penunjuk(msp, target, awal):
-    """Garis penunjuk dari teks ke objek, dengan titik di ujung objek."""
-    _garis(msp, awal, target)
-    msp.add_circle(target, radius=30, dxfattribs={"layer": "A-ANNO-TEXT"})
+def _callout_kiri(msp, p_target: Tuple[float, float], x_label: float, y_label: float, teks_lbl: str) -> None:
+    x_belok = x_label + 260.0
+    _garis(msp, p_target, (x_belok, y_label), "A-ANNO-SYMB", color=2)
+    _garis(msp, (x_belok, y_label), (x_label, y_label), "A-ANNO-SYMB", color=2)
+    msp.add_circle(p_target, radius=32.0, dxfattribs={"layer": "A-ANNO-SYMB", "color": 2})
+    _teks(msp, teks_lbl, (x_label - 60.0, y_label), tinggi=88.0, rata=TA.MIDDLE_RIGHT, color=2)
 
 
-def _elevasi(msp, x, y, label):
-    """Tanda elevasi: segitiga + garis + teks."""
-    _poly(msp, [(x, y), (x - 110, y + 170), (x + 110, y + 170)], "A-ANNO-LEVL")
-    _garis(msp, (x - 150, y + 170), (x + 1100, y + 170), "A-ANNO-LEVL")
-    _teks(msp, label, (x + 180, y + 215), layer="A-ANNO-LEVL")
+def _simbol_elevasi_kanan(msp, x_mulai: float, x_datum: float, y_elev: float, nilai_m: float) -> None:
+    _garis(msp, (x_mulai, y_elev), (x_datum + 450.0, y_elev), "A-ANNO-SYMB", color=8)
+    _poly(msp, [(x_datum - 65.0, y_elev + 100.0), (x_datum + 65.0, y_elev + 100.0), (x_datum, y_elev)], "A-ANNO-SYMB", tutup=True, color=2)
+    lbl = "±0.00" if abs(nilai_m) < 1e-4 else f"{nilai_m:+.2f}"
+    _teks(msp, lbl, (x_datum + 110.0, y_elev + 95.0), tinggi=92.0, rata=TA.MIDDLE_LEFT, color=2)
 
 
-def _dim_h(msp, x1, x2, y_titik, y_garis):
-    msp.add_linear_dim(base=(x1, y_garis), p1=(x1, y_titik), p2=(x2, y_titik), angle=0,
-                       dimstyle=DIM, override={"dimdec": 0}, dxfattribs={"layer": "A-ANNO-DIMS"}).render()
-
-
-def _dim_v(msp, x_titik, z1, z2, x_garis):
-    msp.add_linear_dim(base=(x_garis, z1), p1=(x_titik, z1), p2=(x_titik, z2), angle=90,
-                       dimstyle=DIM, override={"dimdec": 0}, dxfattribs={"layer": "A-ANNO-DIMS"}).render()
-
-
-def _judul(msp, isi, x_tengah, y, skala="1 : 100"):
-    _teks(msp, isi, (x_tengah, y), tinggi=260, rata=TA.MIDDLE_CENTER)
-    _teks(msp, f"Skala {skala}", (x_tengah, y - 330), tinggi=130, rata=TA.MIDDLE_CENTER)
-    _garis(msp, (x_tengah - 1800, y - 150), (x_tengah + 1800, y - 150))
-
-
-def _dasar(rumah):
-    """Ukuran dasar yang dipakai semua gambar."""
-    xs = [p[0] for d in rumah.dinding for p in (d.a, d.b)]
-    ys = [p[1] for d in rumah.dinding for p in (d.a, d.b)]
-    st = rumah.struktur
-    pf = st.get("pondasi", {})
-    sl = st.get("sloof", [150, 200])
-    rg = st.get("ring_balok", [150, 150])
-    return dict(
-        minx=min(xs), maxx=max(xs), miny=min(ys), maxy=max(ys),
-        t=float(rumah.dinding_default.get("tebal", 150)),
-        H=float(rumah.lantai.get("tinggi_dinding", 3000)),
-        Hp=float(rumah.lantai.get("tinggi_plafon", 2800)),
-        lb=float(pf.get("lebar_bawah", 600)), la=float(pf.get("lebar_atas", 300)), tp=float(pf.get("tinggi", 700)),
-        bs=float(sl[0]), hs=float(sl[1]), rw=float(rg[0]), rh=float(rg[1]),
-        th=math.tan(math.radians(rumah.atap.get("kemiringan_derajat", 30))),
-        deg=rumah.atap.get("kemiringan_derajat", 30),
-        ov=float(rumah.atap.get("overstek", 600)),
-        nok=rumah.atap.get("arah_nok", "x"),
-        penutup=rumah.atap.get("penutup", "genteng"), rangka=rumah.atap.get("rangka", "baja ringan"),
-        Z_TANAH=-400.0,
+def _dim_horizontal(msp, x1: float, x2: float, y_dim: float) -> None:
+    dim = msp.add_linear_dim(
+        base=((x1 + x2) / 2.0, y_dim),
+        p1=(x1, y_dim),
+        p2=(x2, y_dim),
+        angle=0.0,
+        override={"dimtxt": 105.0, "dimasz": 80.0, "dimdec": 0, "dimclrd": 1, "dimclre": 1, "dimclrt": 2},
+        dxfattribs={"layer": "A-ANNO-DIMS"},
     )
+    dim.render()
 
 
-def _z_atap(b, c, c_min, c_max):
-    """Tinggi bidang atap pelana pada koordinat c (tegak lurus nok)."""
-    half = (c_max - c_min) / 2
-    return b["H"] + (half - abs(c - (c_min + c_max) / 2)) * b["th"]
-
-
-def _interval_kurang(awal, akhir, lubang):
-    """Potong [awal, akhir] dengan daftar lubang [(z0, z1)], kembalikan sisa segmen."""
-    seg = [(awal, akhir)]
-    for z0, z1 in sorted(lubang):
-        baru = []
-        for a, b in seg:
-            if z1 <= a or z0 >= b:
-                baru.append((a, b))
-                continue
-            if z0 > a:
-                baru.append((a, z0))
-            if z1 < b:
-                baru.append((z1, b))
-        seg = baru
-    return seg
-
-
-# ----------------------------------------------------------------- detail potongan & fasad
-def gambar_ornamen_roster(msp, x0, y0, lebar, tinggi, ukuran_roster=200, jarak=25, layer="ORNAMEN_FASAD"):
-    return
-
-
-def gambar_tali_air(msp, x0, y0, lebar, tinggi, interval=250, layer="ORNAMEN_FASAD"):
-    """Menggambar aksen garis alur tali air (groove lines) horizontal pada dinding fasad."""
-    cur_y = y0 + interval
-    while cur_y <= y0 + tinggi - 50:
-        _garis(msp, (x0, cur_y), (x0 + lebar, cur_y), layer)
-        _garis(msp, (x0, cur_y + 12), (x0 + lebar, cur_y + 12), layer)
-        cur_y += interval
-
-
-def gambar_kuda_kuda_potongan(msp, u_a, u_b, u_t, c_min, c_max, H, th, z_e, z_r, X, Z, sepanjang=False, zc=None, potong=None, T=130):
-    """Menggambar detail rangka atap kuda-kuda baja ringan profesional (chords & web segitiga)."""
-    lyr = "ATAP_DETAIL"
-    if not sepanjang:
-        _garis(msp, (X(c_min), Z(H)), (X(c_max), Z(H)), lyr)
-        _garis(msp, (X(c_min), Z(H + 75)), (X(c_max), Z(H + 75)), lyr)
-
-        _garis(msp, (X(u_a), Z(z_e)), (X(u_t), Z(z_r)), lyr)
-        _garis(msp, (X(u_b), Z(z_e)), (X(u_t), Z(z_r)), lyr)
-        _garis(msp, (X(u_a), Z(z_e - 75)), (X(u_t), Z(z_r - 75)), lyr)
-        _garis(msp, (X(u_b), Z(z_e - 75)), (X(u_t), Z(z_r - 75)), lyr)
-
-        _garis(msp, (X(u_t - 25), Z(H + 75)), (X(u_t - 25), Z(z_r - 20)), lyr)
-        _garis(msp, (X(u_t + 25), Z(H + 75)), (X(u_t + 25), Z(z_r - 20)), lyr)
-
-        bentang_kiri = max(100.0, u_t - c_min)
-        n_seg = max(2, min(5, int(round(bentang_kiri / 800))))
-        du = bentang_kiri / n_seg
-        for i in range(1, n_seg):
-            u_i = c_min + i * du
-            z_top_i = H + (u_i - c_min) * th
-            _garis(msp, (X(u_i), Z(H + 75)), (X(u_i), Z(z_top_i - 65)), lyr)
-            u_prev = c_min + (i - 1) * du
-            z_top_prev = H + (u_prev - c_min) * th
-            if i % 2 == 1:
-                _garis(msp, (X(u_prev), Z(H + 75)), (X(u_i), Z(z_top_i - 65)), lyr)
-            else:
-                _garis(msp, (X(u_i), Z(H + 75)), (X(u_prev), Z(z_top_prev - 65)), lyr)
-
-        bentang_kanan = max(100.0, c_max - u_t)
-        n_seg_r = max(2, min(5, int(round(bentang_kanan / 800))))
-        du_r = bentang_kanan / n_seg_r
-        for i in range(1, n_seg_r):
-            u_i = c_max - i * du_r
-            z_top_i = H + (c_max - u_i) * th
-            _garis(msp, (X(u_i), Z(H + 75)), (X(u_i), Z(z_top_i - 65)), lyr)
-            u_prev = c_max - (i - 1) * du_r
-            z_top_prev = H + (c_max - u_prev) * th
-            if i % 2 == 1:
-                _garis(msp, (X(u_prev), Z(H + 75)), (X(u_i), Z(z_top_i - 65)), lyr)
-            else:
-                _garis(msp, (X(u_i), Z(H + 75)), (X(u_prev), Z(z_top_prev - 65)), lyr)
-
-        for side, u_start, u_end in [(-1, u_t, u_a), (1, u_t, u_b)]:
-            cur_u = u_t
-            step = 320 * side
-            while (cur_u > u_a if side < 0 else cur_u < u_b):
-                zu = z_r - abs(cur_u - u_t) * th
-                _garis(msp, (X(cur_u - 20), Z(zu + 5)), (X(cur_u + 20), Z(zu + 5)), lyr)
-                cur_u += step
-    else:
-        if zc is not None and potong and len(potong) > 1:
-            _garis(msp, (X(u_a), Z(zc - 80)), (X(u_b), Z(zc - 80)), lyr)
-            _garis(msp, (X(u_a), Z(H + 60)), (X(u_b), Z(H + 60)), lyr)
-            for w in potong:
-                _poly(msp, [(X(w["u"] - 40), Z(H)), (X(w["u"] + 40), Z(H)),
-                            (X(w["u"] + 40), Z(zc)), (X(w["u"] - 40), Z(zc))], lyr)
-            for w1, w2 in zip(potong, potong[1:]):
-                _garis(msp, (X(w1["u"] + 40), Z(H + 60)), (X(w2["u"] - 40), Z(zc - 80)), lyr)
-                _garis(msp, (X(w1["u"] + 40), Z(zc - 80)), (X(w2["u"] - 40), Z(H + 60)), lyr)
-
-
-def gambar_listplank(msp, u_a, u_b, z_e, X, Z):
-    """Menggambar papan listplank GRC t=25 mm, h=200 mm pada ujung overstek atap."""
-    lyr = "ATAP_DETAIL"
-    p_kiri = [(X(u_a - 25), Z(z_e - 60)), (X(u_a), Z(z_e - 60)),
-              (X(u_a), Z(z_e + 140)), (X(u_a - 25), Z(z_e + 140))]
-    _poly(msp, p_kiri, lyr)
-    p_kanan = [(X(u_b), Z(z_e - 60)), (X(u_b + 25), Z(z_e - 60)),
-               (X(u_b + 25), Z(z_e + 140)), (X(u_b), Z(z_e + 140))]
-    _poly(msp, p_kanan, lyr)
-
-
-def gambar_detail_plafon(msp, potong, Hp, H, X, Z):
-    """Menggambar detail plafon gypsum 9 mm, list cornice, rangka hollow 40x40, dan rod hanger."""
-    lyr = "ATAP_DETAIL"
-    for w1, w2 in zip(potong, potong[1:]):
-        x1, x2 = w1["u"] + w1["t"] / 2, w2["u"] - w2["t"] / 2
-        if x2 - x1 < 100:
-            continue
-        _garis(msp, (X(x1), Z(Hp)), (X(x2), Z(Hp)), lyr)
-        _garis(msp, (X(x1), Z(Hp + 9)), (X(x2), Z(Hp + 9)), lyr)
-
-        _poly(msp, [(X(x1), Z(Hp)), (X(x1 + 50), Z(Hp)), (X(x1), Z(Hp - 50))], lyr)
-        _poly(msp, [(X(x2), Z(Hp)), (X(x2 - 50), Z(Hp)), (X(x2), Z(Hp - 50))], lyr)
-
-        xh = x1 + 400
-        while xh < x2 - 200:
-            hk = [(X(xh - 20), Z(Hp + 9)), (X(xh + 20), Z(Hp + 9)),
-                  (X(xh + 20), Z(Hp + 49)), (X(xh - 20), Z(Hp + 49))]
-            _poly(msp, hk, lyr)
-            _garis(msp, (X(xh), Z(Hp + 49)), (X(xh), Z(H)), lyr)
-            xh += 600
-
-
-def gambar_detail_bukaan_potongan(msp, u, t, q, X, Z):
-    """Mengisi area dinding bukaan terpotong dengan kusen penampang, daun pintu, dan kaca berprofil."""
-    lyr = "KUSEN_POTONGAN"
-    z0, z1 = q.ambang, q.ambang + q.tinggi
-    kw = 50.0
-
-    if q.jenis == "pintu":
-        k_atas = [(X(u - t / 2), Z(z1 - kw)), (X(u + t / 2), Z(z1 - kw)),
-                  (X(u + t / 2), Z(z1)), (X(u - t / 2), Z(z1))]
-        _poly(msp, k_atas, lyr)
-        _arsir(msp, k_atas, "ANSI31", 10, lyr)
-
-        d_pts = [(X(u - t / 2 + 15), Z(z0)), (X(u - t / 2 + 50), Z(z0)),
-                 (X(u - t / 2 + 50), Z(z1 - kw)), (X(u - t / 2 + 15), Z(z1 - kw))]
-        _poly(msp, d_pts, lyr)
-        _arsir(msp, d_pts, "SOLID", 1, lyr)
-
-        _garis(msp, (X(u - t / 2 + 50), Z(z0 + 1000)), (X(u - t / 2 + 85), Z(z0 + 1000)), lyr)
-        _garis(msp, (X(u - t / 2 + 85), Z(z0 + 960)), (X(u - t / 2 + 85), Z(z0 + 1030)), lyr)
-        _garis(msp, (X(u - t / 2), Z(z0)), (X(u + t / 2), Z(z0)), lyr)
-
-    elif q.jenis == "jendela":
-        k_atas = [(X(u - t / 2), Z(z1 - kw)), (X(u + t / 2), Z(z1 - kw)),
-                  (X(u + t / 2), Z(z1)), (X(u - t / 2), Z(z1))]
-        _poly(msp, k_atas, lyr)
-        _arsir(msp, k_atas, "ANSI31", 10, lyr)
-
-        k_bwh = [(X(u - t / 2), Z(z0)), (X(u + t / 2), Z(z0)),
-                 (X(u + t / 2), Z(z0 + kw)), (X(u - t / 2), Z(z0 + kw))]
-        _poly(msp, k_bwh, lyr)
-        _arsir(msp, k_bwh, "ANSI31", 10, lyr)
-
-        r_atas = [(X(u - 17.5), Z(z1 - kw - 35)), (X(u + 17.5), Z(z1 - kw - 35)),
-                  (X(u + 17.5), Z(z1 - kw)), (X(u - 17.5), Z(z1 - kw))]
-        r_bwh = [(X(u - 17.5), Z(z0 + kw)), (X(u + 17.5), Z(z0 + kw)),
-                 (X(u + 17.5), Z(z0 + kw + 35)), (X(u - 17.5), Z(z0 + kw + 35))]
-        _poly(msp, r_atas, lyr)
-        _poly(msp, r_bwh, lyr)
-
-        z_kaca0 = z0 + kw + 35
-        z_kaca1 = z1 - kw - 35
-        _garis(msp, (X(u - 3), Z(z_kaca0)), (X(u - 3), Z(z_kaca1)), lyr)
-        _garis(msp, (X(u + 3), Z(z_kaca0)), (X(u + 3), Z(z_kaca1)), lyr)
-
-        zg = (z0 + z1) / 2
-        _garis(msp, (X(u - 35), Z(zg - 80)), (X(u + 35), Z(zg - 20)), lyr)
-        _garis(msp, (X(u - 35), Z(zg + 20)), (X(u + 35), Z(zg + 80)), lyr)
-
-
-def gambar_eksterior_fasad(msp, Wb, H, Zt, daftar, X, Z):
-    """Menambahkan elemen eksterior fasad depan: teras bertingkat, kanopi, carport, pagar, dan gerbang."""
-    lyr = "EKSTERIOR"
-    orn = "ORNAMEN_FASAD"
-
-    pintu_list = [q for _, _, q in daftar if q.jenis == "pintu"]
-    if pintu_list:
-        u_pintu = next(u0 for u0, _, q in daftar if q.jenis == "pintu")
-    else:
-        u_pintu = Wb * 0.55
-
-    xt1 = max(100.0, u_pintu - 600.0)
-    xt2 = min(Wb - 100.0, u_pintu + 1600.0)
-    _poly(msp, [(X(xt1 - 150), Z(Zt)), (X(xt2 + 150), Z(Zt)), (X(xt2 + 150), Z(-100)), (X(xt1 - 150), Z(-100))], lyr)
-    _poly(msp, [(X(xt1), Z(-100)), (X(xt2), Z(-100)), (X(xt2), Z(-50)), (X(xt1), Z(-50))], lyr)
-    _poly(msp, [(X(xt1 + 80), Z(-50)), (X(xt2 - 80), Z(-50)), (X(xt2 - 80), Z(0)), (X(xt1 + 80), Z(0))], lyr)
-
-    w_tiang = 250.0
-    x_tiang1 = xt2 - w_tiang
-    x_tiang2 = xt2
-    _poly(msp, [(X(x_tiang1), Z(0)), (X(x_tiang2), Z(0)), (X(x_tiang2), Z(2800)), (X(x_tiang1), Z(2800))], lyr)
-    gambar_tali_air(msp, X(x_tiang1), Z(400), w_tiang, 2300, interval=250, layer=orn)
-
-    kanopi_pts = [(X(xt1 - 100), Z(2800)), (X(xt2 + 150), Z(2800)),
-                  (X(xt2 + 150), Z(2900)), (X(xt1 - 100), Z(2900))]
-    _poly(msp, kanopi_pts, lyr)
-    _arsir(msp, kanopi_pts, "AR-CONC", 1.5, lyr)
-
-    _poly(msp, [(X(u_pintu - 180), Z(1700)), (X(u_pintu - 80), Z(1700)),
-                (X(u_pintu - 80), Z(1900)), (X(u_pintu - 180), Z(1900))], lyr)
-
-    if u_pintu > 1800.0:
-        gambar_tali_air(msp, X(80), Z(200), min(1200.0, u_pintu - 300.0), H - 400, interval=280, layer=orn)
-
-    xc1 = -1800.0 if xt1 < Wb / 2 else 0.0
-    xc2 = 0.0 if xt1 < Wb / 2 else max(2400.0, xt1 - 200.0)
-    _garis(msp, (X(xc1), Z(Zt + 200)), (X(xc2), Z(Zt + 200)), lyr)
-    cur_cp = xc1 + 600.0
-    while cur_cp < xc2:
-        _garis(msp, (X(cur_cp), Z(Zt)), (X(cur_cp), Z(Zt + 200)), lyr)
-        cur_cp += 600.0
-
-    _poly(msp, [(X(xc1), Z(Zt + 200)), (X(xc1 + 100), Z(Zt + 200)),
-                (X(xc1 + 100), Z(3000)), (X(xc1), Z(3000))], lyr)
-    _poly(msp, [(X(xc1), Z(2920)), (X(xc2), Z(2920)),
-                (X(xc2), Z(3000)), (X(xc1), Z(3000))], lyr)
-
-    _poly(msp, [(X(xc1 - 300), Z(Zt)), (X(xc1), Z(Zt)), (X(xc1), Z(Zt + 1200)), (X(xc1 - 300), Z(Zt + 1200))], lyr)
-    _poly(msp, [(X(xc1 - 350), Z(Zt + 1200)), (X(xc1 + 50), Z(Zt + 1200)),
-                (X(xc1 + 50), Z(Zt + 1280)), (X(xc1 - 350), Z(Zt + 1280))], lyr)
-
-    w_gate = xc2 - xc1
-    if w_gate > 800:
-        _poly(msp, [(X(xc1), Z(Zt + 60)), (X(xc2), Z(Zt + 60)),
-                    (X(xc2), Z(Zt + 1350)), (X(xc1), Z(Zt + 1350))], lyr)
-        xg = xc1 + 120
-        while xg < xc2 - 60:
-            _garis(msp, (X(xg), Z(Zt + 60)), (X(xg), Z(Zt + 1350)), lyr)
-            xg += 120
-        msp.add_circle((X(xc1 + 200), Z(Zt + 30)), radius=25, dxfattribs={"layer": lyr})
-        msp.add_circle((X(xc2 - 200), Z(Zt + 30)), radius=25, dxfattribs={"layer": lyr})
-        _garis(msp, (X(xc1 - 50), Z(Zt + 10)), (X(xc2 + 100), Z(Zt + 10)), lyr)
-
-    x_pagar1 = xc2
-    x_pagar2 = Wb + 400.0
-    _poly(msp, [(X(x_pagar1), Z(Zt)), (X(x_pagar2), Z(Zt)),
-                (X(x_pagar2), Z(Zt + 950)), (X(x_pagar1), Z(Zt + 950))], lyr)
-    _poly(msp, [(X(x_pagar1 - 20), Z(Zt + 950)), (X(x_pagar2 + 50), Z(Zt + 950)),
-                (X(x_pagar2 + 50), Z(Zt + 1010)), (X(x_pagar1 - 20), Z(Zt + 1010))], lyr)
-    gambar_tali_air(msp, X(x_pagar1 + 50), Z(Zt + 150), x_pagar2 - x_pagar1 - 100, 700, interval=200, layer=orn)
-
-
-# ----------------------------------------------------------------- potongan
-def gambar_potongan(rumah, msp, sec, ox, oy, skala_label="1 : 50"):
-    """Gambar satu potongan. Titik u=0 diletakkan di x=ox, tinggi z=0 di y=oy. Kembalikan bbox."""
-    b = _dasar(rumah)
-    arah, pos, nama = sec["arah"], float(sec["posisi"]), sec["nama"]
-    H, Hp, rh, hs, tp, lb, la, bs = b["H"], b["Hp"], b["rh"], b["hs"], b["tp"], b["lb"], b["la"], b["bs"]
-    X, Z = (lambda u: ox + u), (lambda z: oy + z)
-
-    potong = []
-    for d in rumah.dinding:
-        (ax, ay), (bx, by) = d.a, d.b
-        if arah == "x" and abs(ax - bx) < 1e-6 and min(ay, by) - 1e-6 <= pos <= max(ay, by) + 1e-6:
-            u, s = ax, abs(pos - ay)
-        elif arah == "y" and abs(ay - by) < 1e-6 and min(ax, bx) - 1e-6 <= pos <= max(ax, bx) + 1e-6:
-            u, s = ay, abs(pos - ax)
+def _dinding_terpotong_pada_garis(dinding_list, arah: str, pos: float) -> List[Tuple[float, float]]:
+    hasil: List[Tuple[float, float]] = []
+    for d in dinding_list:
+        if arah == "x":
+            ya, yb = float(d.a[1]), float(d.b[1])
+            if min(ya, yb) - 1.0 <= pos <= max(ya, yb) + 1.0 and abs(yb - ya) > 10.0:
+                t = (pos - ya) / (yb - ya)
+                xc = float(d.a[0]) + t * (float(d.b[0]) - float(d.a[0]))
+                hasil.append((xc, float(d.tebal)))
         else:
-            continue
-        bk = [q for q in rumah.bukaan if q.dinding == d.id and q.offset - 1e-6 <= s <= q.akhir + 1e-6]
-        potong.append(dict(u=u, t=float(d.tebal or b["t"]), bukaan=bk))
-    potong.sort(key=lambda w: w["u"])
-    if not potong:
-        return None
-    u_min, u_max = potong[0]["u"], potong[-1]["u"]
+            xa, xb = float(d.a[0]), float(d.b[0])
+            if min(xa, xb) - 1.0 <= pos <= max(xa, xb) + 1.0 and abs(xb - xa) > 10.0:
+                t = (pos - xa) / (xb - xa)
+                yc = float(d.a[1]) + t * (float(d.b[1]) - float(d.a[1]))
+                hasil.append((yc, float(d.tebal)))
+    hasil.sort(key=lambda item: item[0])
+    unik: List[Tuple[float, float]] = []
+    for c, tb in hasil:
+        if not unik or abs(c - unik[-1][0]) > 50.0:
+            unik.append((c, tb))
+    return unik
 
-    ov, th, T = b["ov"], b["th"], 130
-    if b["nok"] == "x":
-        c_min, c_max, sepanjang = b["miny"], b["maxy"], (arah == "x")
-        u_a, u_b = b["minx"] - ov, b["maxx"] + ov
+
+def _gambar_pondasi_potongan(msp, cx: float, y_nol: float, rumah, is_2lt: bool) -> None:
+    st = rumah.struktur or {}
+    pnd = st.get("pondasi", {"lebar_bawah": 600, "lebar_atas": 300, "tinggi": 700})
+    lb_bwh = float(pnd.get("lebar_bawah", 600.0))
+    lb_ats = float(pnd.get("lebar_atas", 300.0))
+    t_pnd = float(pnd.get("tinggi", 700.0))
+    sloof = st.get("sloof", [200, 300] if is_2lt else [150, 200])
+    sw, sh = float(sloof[0]), float(sloof[1])
+
+    y_top_pnd = y_nol - sh
+    y_bot_pnd = y_top_pnd - t_pnd
+
+    if is_2lt:
+        y_fp = y_nol - 1200.0
+        # Pasir urug & lantai kerja
+        _poly(msp, [(cx - 560.0, y_fp - 100.0), (cx + 560.0, y_fp - 100.0), (cx + 560.0, y_fp - 50.0), (cx - 560.0, y_fp - 50.0)], "S-FNDN")
+        _poly(msp, [(cx - 560.0, y_fp - 50.0), (cx + 560.0, y_fp - 50.0), (cx + 560.0, y_fp), (cx - 560.0, y_fp)], "S-FNDN")
+        # Footplat trapesium 100x100x25/35
+        fp_pts = [(cx - 500.0, y_fp), (cx + 500.0, y_fp), (cx + 500.0, y_fp + 220.0), (cx + 150.0, y_fp + 300.0), (cx - 150.0, y_fp + 300.0), (cx - 500.0, y_fp + 220.0)]
+        _poly(msp, fp_pts, "S-COLS", color=1)
+        _arsir(msp, fp_pts, "AR-CONC", 22.0, "S-COLS", color=1)
+        # Pedestal
+        ped_pts = [(cx - 125.0, y_fp + 300.0), (cx + 125.0, y_fp + 300.0), (cx + 125.0, y_nol), (cx - 125.0, y_nol)]
+        _poly(msp, ped_pts, "S-COLS", color=1)
+        _arsir(msp, ped_pts, "AR-CONC", 22.0, "S-COLS", color=1)
     else:
-        c_min, c_max, sepanjang = b["minx"], b["maxx"], (arah == "y")
-        u_a, u_b = b["miny"] - ov, b["maxy"] + ov
-    zc = _z_atap(b, pos, c_min, c_max) if sepanjang else None
-    ujung = (b["minx"], b["maxx"]) if arah == "x" else (b["miny"], b["maxy"])
+        _poly(msp, [(cx - lb_bwh / 2 - 100, y_bot_pnd - 200), (cx + lb_bwh / 2 + 100, y_bot_pnd - 200),
+                    (cx + lb_bwh / 2 + 100, y_bot_pnd - 150), (cx - lb_bwh / 2 - 100, y_bot_pnd - 150)], "S-FNDN")
+        _poly(msp, [(cx - lb_bwh / 2 - 100, y_bot_pnd - 150), (cx + lb_bwh / 2 + 100, y_bot_pnd - 150),
+                    (cx + lb_bwh / 2 + 100, y_bot_pnd), (cx - lb_bwh / 2 - 100, y_bot_pnd)], "S-FNDN")
+        pts_pnd = [(cx - lb_bwh / 2, y_bot_pnd), (cx + lb_bwh / 2, y_bot_pnd), (cx + lb_ats / 2, y_top_pnd), (cx - lb_ats / 2, y_top_pnd)]
+        _poly(msp, pts_pnd, "S-FNDN")
+        _arsir(msp, pts_pnd, "GRAVEL", 32.0, "S-FNDN")
 
-    contoh = {}
-    for w in potong:
-        u, t = w["u"], w["t"]
-        lubang = [(q.ambang, q.ambang + q.tinggi) for q in w["bukaan"]]
-        for z0, z1 in _interval_kurang(0, H - rh, lubang):
-            pts = [(X(u - t / 2), Z(z0)), (X(u + t / 2), Z(z0)), (X(u + t / 2), Z(z1)), (X(u - t / 2), Z(z1))]
-            _poly(msp, pts, "A-SECT-WALL")
-            _arsir(msp, pts, "ANSI31", 25, "A-WALL-PATT")
+    pts_sl = [(cx - sw / 2, y_top_pnd), (cx + sw / 2, y_top_pnd), (cx + sw / 2, y_nol), (cx - sw / 2, y_nol)]
+    _poly(msp, pts_sl, "S-COLS", color=1)
+    _arsir(msp, pts_sl, "AR-CONC", 22.0, "S-COLS", color=1)
 
-        for q in w["bukaan"]:
-            gambar_detail_bukaan_potongan(msp, u, t, q, X, Z)
-            z0, z1 = q.ambang, q.ambang + q.tinggi
-            if q.jenis == "jendela":
-                contoh.setdefault("jendela", (X(u), Z((z0 + z1) / 2), q.bahan))
-            elif q.jenis == "pintu":
-                contoh.setdefault("pintu", (X(u), Z((z0 + z1) / 2), q.bahan))
 
-        if sepanjang and any(abs(u - e) < 1e-6 for e in ujung) and zc > H:
-            gp = [(X(u - t / 2), Z(H)), (X(u + t / 2), Z(H)), (X(u + t / 2), Z(zc)), (X(u - t / 2), Z(zc))]
-            _poly(msp, gp, "A-SECT-WALL")
-            _arsir(msp, gp, "ANSI31", 25, "A-WALL-PATT")
+def _gambar_tangga_potongan_sinkron(
+    msp,
+    arah: str,
+    xl: float,
+    xr: float,
+    x_mid_wall: float,
+    y_nol: float,
+    y_lt2: float,
+    t_pelat: float,
+    n_trap_tot: int,
+) -> Tuple[float, float]:
+    """Menggambar tangga L-shape sinkron dengan denah (selasar 900 mm di atas tangga)."""
+    y_bordes = y_nol + (y_lt2 - y_nol) * 0.50
 
-        rb = [(X(u - t / 2), Z(H - rh)), (X(u + t / 2), Z(H - rh)), (X(u + t / 2), Z(H)), (X(u - t / 2), Z(H))]
-        _poly(msp, rb, "S-BETON")
-        _arsir(msp, rb, "AR-CONC", 1.5, "S-BETON")
-        sf = [(X(u - bs / 2), Z(-hs)), (X(u + bs / 2), Z(-hs)), (X(u + bs / 2), Z(0)), (X(u - bs / 2), Z(0))]
-        _poly(msp, sf, "S-BETON")
-        _arsir(msp, sf, "AR-CONC", 1.5, "S-BETON")
-        pd = [(X(u - la / 2), Z(-hs)), (X(u + la / 2), Z(-hs)), (X(u + lb / 2), Z(-hs - tp)), (X(u - lb / 2), Z(-hs - tp))]
-        _poly(msp, pd, "S-PONDASI")
-        _arsir(msp, pd, "ANSI37", 30, "S-PONDASI")
-        an = [(X(u - lb / 2), Z(-hs - tp - 150)), (X(u + lb / 2), Z(-hs - tp - 150)), (X(u + lb / 2), Z(-hs - tp)), (X(u - lb / 2), Z(-hs - tp))]
-        _poly(msp, an, "S-PONDASI")
-        _arsir(msp, an, "GRAVEL", 12, "S-PONDASI")
-        ps = [(X(u - lb / 2), Z(-hs - tp - 200)), (X(u + lb / 2), Z(-hs - tp - 200)), (X(u + lb / 2), Z(-hs - tp - 150)), (X(u - lb / 2), Z(-hs - tp - 150))]
-        _poly(msp, ps, "S-PONDASI")
-    z_dasar = -hs - tp - 200
+    if arah == "x":
+        # POTONGAN A-A:
+        # Bordes di kanan (x = 5100..5925), Lengan 2 miring naik ke KIRI dari x=5100 sampai x=3900,
+        # menyisakan selasar bersih 900 mm (x=3000..3900) dari dinding tengah!
+        w_bordes = 825.0
+        x_b1 = xr - 75.0
+        x_b0 = x_b1 - w_bordes
+        x_top = max(x_mid_wall + 900.0, x_b0 - 1200.0)
 
-    for w1, w2 in zip(potong, potong[1:]):
-        x1, x2 = w1["u"] + w1["t"] / 2, w2["u"] - w2["t"] / 2
-        if x2 - x1 < 100:
-            continue
-        lt = [(X(x1), Z(-150)), (X(x2), Z(-150)), (X(x2), Z(0)), (X(x1), Z(0))]
-        _poly(msp, lt, "A-SECT-WALL")
-        _arsir(msp, lt, "AR-SAND", 4, "A-SECT-WALL")
+        pts_bordes = [(x_b0, y_bordes - 150.0), (x_b1, y_bordes - 150.0), (x_b1, y_bordes), (x_b0, y_bordes)]
+        _poly(msp, pts_bordes, "S-COLS", tutup=True, color=1)
+        _arsir(msp, pts_bordes, "AR-CONC", 20.0, "S-COLS", color=1)
 
-    gambar_detail_plafon(msp, potong, Hp, H, X, Z)
+        n1 = 8
+        _poly(msp, [(x_b0, y_nol), (x_b1, y_nol), (x_b1, y_bordes - 150.0), (x_b0, y_bordes - 150.0)], "A-FLOR-STRS", tutup=True, color=3)
+        for i in range(1, n1):
+            ys = y_nol + i * ((y_bordes - 150.0 - y_nol) / n1)
+            _garis(msp, (x_b0, ys), (x_b1, ys), "A-FLOR-STRS", color=3)
 
-    t_kiri, t_kanan = u_min - potong[0]["t"] / 2 - 1100, u_max + potong[-1]["t"] / 2 + 1100
-    _garis(msp, (X(t_kiri), Z(b["Z_TANAH"])), (X(u_min - lb / 2), Z(b["Z_TANAH"])), "A-GROUND")
-    _garis(msp, (X(u_max + lb / 2), Z(b["Z_TANAH"])), (X(t_kanan), Z(b["Z_TANAH"])), "A-GROUND")
-    for zz in (b["Z_TANAH"] - 150, b["Z_TANAH"] - 300):
-        _garis(msp, (X(t_kiri + 300), Z(zz)), (X(u_min - lb / 2 - 150), Z(zz)), "A-GROUND")
-        _garis(msp, (X(u_max + lb / 2 + 150), Z(zz)), (X(t_kanan - 300), Z(zz)), "A-GROUND")
+        n2 = 6
+        dx = (x_b0 - x_top) / n2
+        dy = (y_lt2 - y_bordes) / n2
+        pts_lengan2 = [(x_b0, y_bordes)]
+        for s in range(n2):
+            xa = x_b0 - s * dx
+            xb = x_b0 - (s + 1) * dx
+            yb = y_bordes + (s + 1) * dy
+            pts_lengan2.append((xa, yb))
+            pts_lengan2.append((xb, yb))
+        pts_lengan2.append((x_top, y_lt2 - t_pelat))
+        pts_lengan2.append((x_b0, y_bordes - 150.0))
+        _poly(msp, pts_lengan2, "S-COLS", tutup=True, color=1)
+        _arsir(msp, pts_lengan2, "AR-CONC", 20.0, "S-COLS", color=1)
 
-    if sepanjang:
-        pita = [(X(u_a), Z(zc)), (X(u_b), Z(zc)), (X(u_b), Z(zc + T)), (X(u_a), Z(zc + T))]
-        z_puncak = zc + T
-        z_e = zc
-        u_t = (u_a + u_b) / 2
+        _garis(msp, (x_b1 - 40.0, y_bordes + 900.0), (x_b0, y_bordes + 900.0), "A-FLOR-STRS", color=3)
+        _garis(msp, (x_b0, y_bordes + 900.0), (x_top, y_lt2 + 900.0), "A-FLOR-STRS", color=3)
+        for k in range(n2 + 1):
+            xr_p = x_b0 - k * dx
+            yr_p = y_bordes + k * dy
+            _garis(msp, (xr_p, yr_p), (xr_p, yr_p + 900.0), "A-FLOR-STRS", color=3)
+
+        return (x_top, x_b1)
     else:
-        u_t = (c_min + c_max) / 2
-        z_e = H - ov * th
-        z_r = H + ((c_max - c_min) / 2) * th
-        u_a, u_b = c_min - ov, c_max + ov
-        pita = [(X(u_a), Z(z_e)), (X(u_t), Z(z_r)), (X(u_b), Z(z_e)), (X(u_b), Z(z_e + T)), (X(u_t), Z(z_r + T)), (X(u_a), Z(z_e + T))]
-        z_puncak = z_r + T
-    _poly(msp, pita, "A-ROOF")
-    _arsir(msp, pita, "ANSI31", 20, "A-ROOF")
+        # POTONGAN B-B:
+        # Lengan 1 mulai y=2700 sampai bordes y=4500..5400
+        y_start = xl + 2700.0
+        y_b0 = xl + 4500.0
+        y_b1 = xl + 5400.0
 
-    gambar_kuda_kuda_potongan(msp, u_a, u_b, u_t, c_min, c_max, H, th, z_e, z_r if not sepanjang else zc, X, Z, sepanjang=sepanjang, zc=zc, potong=potong, T=T)
-    gambar_listplank(msp, u_a, u_b, z_e, X, Z)
+        n1 = 8
+        dx = (y_b0 - y_start) / n1
+        dy = (y_bordes - y_nol) / n1
+        pts_lengan1 = [(y_start, y_nol)]
+        for s in range(n1):
+            ya = y_start + s * dx
+            yb = y_start + (s + 1) * dx
+            zb = y_nol + (s + 1) * dy
+            pts_lengan1.append((ya, zb))
+            pts_lengan1.append((yb, zb))
+        pts_lengan1.append((y_b1, y_bordes))
+        pts_lengan1.append((y_b1, y_bordes - 150.0))
+        pts_lengan1.append((y_b0, y_bordes - 150.0))
+        pts_lengan1.append((y_start + 220.0, y_nol))
+        _poly(msp, pts_lengan1, "S-COLS", tutup=True, color=1)
+        _arsir(msp, pts_lengan1, "AR-CONC", 20.0, "S-COLS", color=1)
 
-    xs_as = [w["u"] for w in potong]
-    for a1, a2 in zip(xs_as, xs_as[1:]):
-        _dim_h(msp, X(a1), X(a2), Z(z_dasar), Z(z_dasar - 450))
-    if len(xs_as) > 2:
-        _dim_h(msp, X(xs_as[0]), X(xs_as[-1]), Z(z_dasar), Z(z_dasar - 950))
-    x_r = X(u_max) + potong[-1]["t"] / 2 + 800
-    for z, lab in [(b["Z_TANAH"], "-0.40 (tanah)"), (0, "±0.00 (lantai)"), (Hp, f"+{Hp/1000:.2f} (plafon)"),
-                   (H, f"+{H/1000:.2f} (ring balok)"), (z_puncak, f"+{z_puncak/1000:.2f} (atap)"), (z_dasar, f"{z_dasar/1000:.2f} (pondasi)")]:
-        _elevasi(msp, x_r, Z(z), lab)
-    x_d = x_r + 2100
-    _dim_v(msp, x_r, Z(z_dasar), Z(0), x_d)
-    _dim_v(msp, x_r, Z(0), Z(Hp), x_d)
-    _dim_v(msp, x_r, Z(Hp), Z(H), x_d)
-    _dim_v(msp, x_r, Z(0), Z(z_puncak), x_d + 750)
+        n2 = 6
+        _poly(msp, [(y_b0, y_bordes), (y_b1, y_bordes), (y_b1, y_lt2), (y_b0, y_lt2)], "A-FLOR-STRS", tutup=True, color=3)
+        for j in range(1, n2):
+            zs = y_bordes + j * ((y_lt2 - y_bordes) / n2)
+            _garis(msp, (y_b0, zs), (y_b1, zs), "A-FLOR-STRS", color=3)
 
-    w1 = potong[0]
-    x_ref = X(u_min) - w1["t"] / 2 - 1400
-    lub1 = [(q.ambang, q.ambang + q.tinggi) for q in w1["bukaan"]]
-    z_bata = next((a + (c - a) / 2 for a, c in _interval_kurang(0, H - rh, lub1) if c - a > 400 and a > 0), 1400)
-    ket = [(H - rh / 2, "Ring balok 15/15 beton K-300"), (z_bata, "Pasangan bata merah 1/2 bata, plester + aci"),
-           (-hs / 2, f"Sloof {b['bs']:.0f}/{hs:.0f} beton K-300"), (-hs - tp / 2, "Pondasi batu kali 1:4"),
-           (-hs - tp - 75, "Aanstamping batu belah t=15 cm"), (-hs - tp - 175, "Pasir urug t=5 cm")]
-    if "jendela" in contoh:
-        ket.append((contoh["jendela"][1] - oy, "Jendela " + (contoh["jendela"][2] or "aluminium + kaca")))
-    if "pintu" in contoh:
-        ket.append((contoh["pintu"][1] - oy, "Pintu " + (contoh["pintu"][2] or "kayu solid panel")))
-    ket.sort(key=lambda k: -k[0])
-    zlast = None
-    for z, isi in ket:
-        zt = z if zlast is None or zlast - z >= 190 else zlast - 190
-        _teks(msp, isi, (x_ref, Z(zt) - 45), rata=TA.RIGHT)
-        _penunjuk(msp, (X(w1["u"]), Z(z)), (x_ref + 80, Z(zt)))
-        zlast = zt
-    if len(potong) > 1:
-        ruang = max(zip(potong, potong[1:]), key=lambda p: p[1]["u"] - p[0]["u"])
-        xc = (ruang[0]["u"] + ruang[1]["u"]) / 2
-        _teks(msp, "Lantai keramik 40x40 + spesi", (X(xc), Z(500)), rata=TA.MIDDLE_CENTER)
-        _penunjuk(msp, (X(xc), Z(-60)), (X(xc), Z(430)))
-        _teks(msp, "Plafon gypsum 9 mm + rangka hollow", (X(xc), Z(Hp - 450)), rata=TA.MIDDLE_CENTER)
-        _penunjuk(msp, (X(xc), Z(Hp)), (X(xc), Z(Hp - 380)))
-    xa = X((u_min + u_max) / 2)
-    _teks(msp, f"Rangka atap {b['rangka']} (truss C75) + {b['penutup']}", (xa, Z(z_puncak + 600)), rata=TA.MIDDLE_CENTER)
-    _penunjuk(msp, (xa, Z(z_puncak - 40)), (xa, Z(z_puncak + 530)))
+        _garis(msp, (y_start, y_nol + 900.0), (y_b0, y_bordes + 900.0), "A-FLOR-STRS", color=3)
+        for k in range(n1 + 1):
+            yr_p = y_start + k * dx
+            zr_p = y_nol + k * dy
+            _garis(msp, (yr_p, zr_p), (yr_p, zr_p + 900.0), "A-FLOR-STRS", color=3)
+        _poly(msp, [(y_start, y_lt2), (y_b0, y_lt2), (y_b0, y_lt2 + 900.0), (y_start, y_lt2 + 900.0)], "A-FLOR-STRS", tutup=True, color=3)
+        for kv in range(1, 7):
+            xv = y_start + kv * ((y_b0 - y_start) / 7.0)
+            _garis(msp, (xv, y_lt2), (xv, y_lt2 + 900.0), "A-FLOR-STRS", color=3)
 
-    _judul(msp, f"POTONGAN {nama}", X((u_min + u_max) / 2), Z(z_dasar - 1600), skala=skala_label)
-    return (x_ref - 4200, Z(z_dasar - 2150), x_d + 1350, Z(z_puncak + 900))
+        return (y_start, y_b0)
 
 
-# ----------------------------------------------------------------- tampak
-def gambar_tampak(rumah, msp, sisi, ox, oy, skala_label="1 : 50"):
-    b = _dasar(rumah)
-    H, t, ov, th = b["H"], b["t"], b["ov"], b["th"]
-    minx, maxx, miny, maxy = b["minx"], b["maxx"], b["miny"], b["maxy"]
-    if sisi == "depan":
-        sama = lambda d: abs(d.a[1] - miny) < 1e-6 and abs(d.b[1] - miny) < 1e-6
-        u = lambda p: p[0] - minx
-        Wb = maxx - minx
-    elif sisi == "belakang":
-        sama = lambda d: abs(d.a[1] - maxy) < 1e-6 and abs(d.b[1] - maxy) < 1e-6
-        u = lambda p: maxx - p[0]
-        Wb = maxx - minx
-    elif sisi == "kanan":
-        sama = lambda d: abs(d.a[0] - maxx) < 1e-6 and abs(d.b[0] - maxx) < 1e-6
-        u = lambda p: p[1] - miny
-        Wb = maxy - miny
-    else:
-        sama = lambda d: abs(d.a[0] - minx) < 1e-6 and abs(d.b[0] - minx) < 1e-6
-        u = lambda p: maxy - p[1]
-        Wb = maxy - miny
-    X, Z = (lambda v: ox + v), (lambda z: oy + z)
-    Zt = b["Z_TANAH"]
+def _gambar_interior_potongan(msp, arah: str, xl: float, xr: float, x_mid: float, y_nol: float, y_lt2: float, is_2lt: bool) -> None:
+    """Menambahkan detail interior tampak dalam (pintu panel, jendela kusen, roster tangga, sanitair)."""
+    px = xl + (x_mid - xl) * 0.32
+    _poly(msp, [(px, y_nol), (px + 850.0, y_nol), (px + 850.0, y_nol + 2100.0), (px, y_nol + 2100.0)], "A-DOOR", color=8)
+    _poly(msp, [(px + 60.0, y_nol), (px + 790.0, y_nol), (px + 790.0, y_nol + 2040.0), (px + 60.0, y_nol + 2040.0)], "A-DOOR", color=8)
+    _poly(msp, [(px + 150.0, y_nol + 1050.0), (px + 700.0, y_nol + 1050.0), (px + 700.0, y_nol + 1900.0), (px + 150.0, y_nol + 1900.0)], "A-DOOR", color=8)
+    _poly(msp, [(px + 150.0, y_nol + 180.0), (px + 700.0, y_nol + 180.0), (px + 700.0, y_nol + 920.0), (px + 150.0, y_nol + 920.0)], "A-DOOR", color=8)
 
-    sejajar = (b["nok"] == "x") == (sisi in ("depan", "belakang"))
-    z_e = H - ov * th
-    z_top = min(H, z_e - 160) if sejajar else H
-    _poly(msp, [(X(-t / 2), Z(0)), (X(Wb + t / 2), Z(0)), (X(Wb + t / 2), Z(z_top)), (X(-t / 2), Z(z_top))], "A-ELEV")
-    pl = [(X(-t / 2 - 40), Z(Zt)), (X(Wb + t / 2 + 40), Z(Zt)), (X(Wb + t / 2 + 40), Z(0)), (X(-t / 2 - 40), Z(0))]
-    _poly(msp, pl, "A-ELEV")
-    _arsir(msp, pl, "ANSI37", 30, "S-PONDASI")
-    _garis(msp, (X(-t / 2 - 1600), Z(Zt)), (X(Wb + t / 2 + 1600), Z(Zt)), "A-GROUND")
-
-    daftar = []
-    for d in rumah.dinding:
-        if not sama(d):
-            continue
-        L = math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1])
-        dx, dy = (d.b[0] - d.a[0]) / L, (d.b[1] - d.a[1]) / L
-        for q in rumah.bukaan:
-            if q.dinding != d.id or q.jenis == "bukaan":
-                continue
-            p1 = (d.a[0] + dx * q.offset, d.a[1] + dy * q.offset)
-            p2 = (d.a[0] + dx * q.akhir, d.a[1] + dy * q.akhir)
-            u0, u1 = sorted([u(p1), u(p2)])
-            daftar.append((u0, u1, q))
-    contoh = {}
-    for u0, u1, q in daftar:
-        z0, z1 = q.ambang, q.ambang + q.tinggi
-        if q.jenis == "pintu":
-            lyr = "A-DOOR"
-            _poly(msp, [(X(u0), Z(z0)), (X(u1), Z(z0)), (X(u1), Z(z1)), (X(u0), Z(z1))], lyr)
-            _poly(msp, [(X(u0 + 60), Z(z0)), (X(u1 - 60), Z(z0)), (X(u1 - 60), Z(z1 - 60)), (X(u0 + 60), Z(z1 - 60))], lyr)
-            h = z1 - z0
-            for a, c in [(z0 + 250, z0 + 0.45 * h), (z0 + 0.55 * h, z1 - 300)]:
-                _poly(msp, [(X(u0 + 200), Z(a)), (X(u1 - 200), Z(a)), (X(u1 - 200), Z(c)), (X(u0 + 200), Z(c))], lyr)
-            msp.add_circle((X(u1 - 140), Z(z0 + 0.5 * h)), radius=25, dxfattribs={"layer": lyr})
-            contoh.setdefault("pintu", (u0, u1, z0, z1, q.bahan))
-        else:
-            lyr = "A-GLAZ"
-            _poly(msp, [(X(u0), Z(z0)), (X(u1), Z(z0)), (X(u1), Z(z1)), (X(u0), Z(z1))], lyr)
-            _poly(msp, [(X(u0 + 50), Z(z0 + 50)), (X(u1 - 50), Z(z0 + 50)), (X(u1 - 50), Z(z1 - 50)), (X(u0 + 50), Z(z1 - 50))], lyr)
-            if u1 - u0 > 1000:
-                _garis(msp, (X((u0 + u1) / 2), Z(z0 + 50)), (X((u0 + u1) / 2), Z(z1 - 50)), lyr)
-            _poly(msp, [(X(u0 - 40), Z(z0 - 40)), (X(u1 + 40), Z(z0 - 40)), (X(u1 + 40), Z(z0)), (X(u0 - 40), Z(z0))], lyr)
-            contoh.setdefault("jendela", (u0, u1, z0, z1, q.bahan))
-
-    if sejajar:
-        c_span = (maxy - miny) if b["nok"] == "x" else (maxx - minx)
-        z_r = H + (c_span / 2) * th
-        rect = [(X(-ov - t / 2), Z(z_e)), (X(Wb + ov + t / 2), Z(z_e)), (X(Wb + ov + t / 2), Z(z_r)), (X(-ov - t / 2), Z(z_r))]
-        _poly(msp, rect, "A-ROOF")
-        _arsir(msp, rect, "ANSI31", 30, "A-ROOF")
-        _poly(msp, [(X(-ov - t / 2), Z(z_e - 160)), (X(Wb + ov + t / 2), Z(z_e - 160)), (X(Wb + ov + t / 2), Z(z_e)), (X(-ov - t / 2), Z(z_e))], "A-ROOF")
-        _garis(msp, (X(-ov - t / 2), Z(z_r - 60)), (X(Wb + ov + t / 2), Z(z_r - 60)), "A-ROOF")
-        z_puncak, z_tengah = z_r, (z_e + z_r) / 2
-    else:
-        z_r = H + (Wb / 2) * th
-        band = [(X(-ov), Z(z_e)), (X(Wb / 2), Z(z_r)), (X(Wb + ov), Z(z_e)), (X(Wb + ov), Z(z_e - 150)), (X(Wb / 2), Z(z_r - 150)), (X(-ov), Z(z_e - 150))]
-        _poly(msp, band, "A-ROOF")
-        _arsir(msp, band, "ANSI31", 30, "A-ROOF")
-        _poly(msp, [(X(-t / 2), Z(H)), (X(Wb / 2), Z(z_r - 150)), (X(Wb + t / 2), Z(H))], "A-ELEV")
-        z_puncak, z_tengah = z_r, (z_e + z_r) / 2
-
-    if sisi == "depan":
-        gambar_eksterior_fasad(msp, Wb, H, Zt, daftar, X, Z)
-    elif sisi in ("kanan", "kiri"):
-        gambar_tali_air(msp, X(150), Z(400), min(1800, Wb - 300), H - 600, interval=250, layer="ORNAMEN_FASAD")
-
-    titik = sorted({0.0, float(Wb)} | {v for u0, u1, _ in daftar for v in (u0, u1)})
-    y_t = Z(Zt)
-    for a1, a2 in zip(titik, titik[1:]):
-        if a2 - a1 > 1:
-            _dim_h(msp, X(a1), X(a2), y_t, Z(Zt - 450))
-    _dim_h(msp, X(0), X(Wb), y_t, Z(Zt - 950))
-    x_r = X(Wb) + ov + t / 2 + 700
-    for z, lab in [(Zt, "-0.40 (tanah)"), (0, "±0.00 (lantai)"), (H, f"+{H/1000:.2f} (dinding)"),
-                   (z_e, f"+{z_e/1000:.2f} (tepi atap)"), (z_puncak, f"+{z_puncak/1000:.2f} (nok)")]:
-        _elevasi(msp, x_r, Z(z), lab)
-    x_d = x_r + 2100
-    _dim_v(msp, x_r, Z(Zt), Z(0), x_d)
-    _dim_v(msp, x_r, Z(0), Z(H), x_d)
-    _dim_v(msp, x_r, Z(H), Z(z_puncak), x_d)
-    _dim_v(msp, x_r, Z(0), Z(z_puncak), x_d + 750)
-
-    x_ref = X(-ov - t / 2) - 700
-    ket = [(z_tengah, f"Atap {b['penutup']} + rangka {b['rangka']}", -ov + 60),
-           (H * 0.85, "Dinding bata merah 1/2 bata, plester + aci", -t / 2 + 60),
-           (Zt / 2, "Plint pasangan batu kali", -t / 2)]
-    if "pintu" in contoh:
-        u0, u1, z0, z1, bhn = contoh["pintu"]
-        ket.append(((z0 + z1) / 2 - 300, "Pintu: " + (bhn or "kusen kayu, daun panel"), (u0 + u1) / 2))
-    if "jendela" in contoh:
-        u0, u1, z0, z1, bhn = contoh["jendela"]
-        ket.append(((z0 + z1) / 2, "Jendela: " + (bhn or "kusen aluminium + kaca"), (u0 + u1) / 2))
-    if sisi == "depan":
-        ket.append((Zt + 700, "Pintu gerbang geser hollow & pagar minimalis", -400))
-    ket.sort(key=lambda k: -k[0])
-    zlast = None
-    for z, isi, uu in ket:
-        zt = z if zlast is None or zlast - z >= 230 else zlast - 230
-        _teks(msp, isi, (x_ref, Z(zt) - 40), rata=TA.RIGHT)
-        _penunjuk(msp, (X(uu), Z(z)), (x_ref + 80, Z(zt)))
-        zlast = zt
-    nama = {"depan": "TAMPAK DEPAN", "belakang": "TAMPAK BELAKANG", "kanan": "TAMPAK KANAN", "kiri": "TAMPAK KIRI"}[sisi]
-    _judul(msp, nama, X(Wb / 2), Z(Zt - 1600), skala=skala_label)
-    return (x_ref - 4200, Z(Zt - 2150), x_d + 1350, Z(z_puncak + 750))
+    if is_2lt:
+        jx2 = xl + (x_mid - xl) * 0.25
+        _poly(msp, [(jx2, y_lt2 + 800.0), (jx2 + 1150.0, y_lt2 + 800.0), (jx2 + 1150.0, y_lt2 + 2100.0), (jx2, y_lt2 + 2100.0)], "A-GLAZ", color=8)
+        _garis(msp, (jx2 + 575.0, y_lt2 + 800.0), (jx2 + 575.0, y_lt2 + 2100.0), "A-GLAZ", color=8)
+        _garis(msp, (jx2, y_lt2 + 1650.0), (jx2 + 1150.0, y_lt2 + 1650.0), "A-GLAZ", color=8)
+        if arah == "y":
+            # Panel roster dekoratif di samping tangga & sanitair KM/WC di ruang kanan
+            rx_r = xl + 5600.0
+            _poly(msp, [(rx_r, y_lt2 + 400.0), (rx_r + 1200.0, y_lt2 + 400.0), (rx_r + 1200.0, y_lt2 + 2200.0), (rx_r, y_lt2 + 2200.0)], "A-FURN", color=8)
+            for ir in range(1, 6):
+                _garis(msp, (rx_r + ir * 200.0, y_lt2 + 400.0), (rx_r + ir * 200.0, y_lt2 + 2200.0), "A-FURN", color=8)
+            kx = xr - 720.0
+            _poly(msp, [(kx, y_nol), (kx + 380.0, y_nol), (kx + 380.0, y_nol + 420.0), (kx, y_nol + 420.0)], "A-FURN", color=8)
+            _poly(msp, [(kx + 240.0, y_nol + 420.0), (kx + 390.0, y_nol + 420.0), (kx + 390.0, y_nol + 800.0), (kx + 240.0, y_nol + 800.0)], "A-FURN", color=8)
+            _garis(msp, (xr - 150.0, y_nol + 1100.0), (xr - 150.0, y_nol + 2050.0), "A-FURN", color=8)
+            _garis(msp, (xr - 150.0, y_nol + 2050.0), (xr - 360.0, y_nol + 2050.0), "A-FURN", color=8)
 
 
-# ----------------------------------------------------------------- lembar lengkap
-def ekspor_gambar_lengkap(
+def _gambar_rangka_atap_pelana(msp, x_kiri: float, x_kanan: float, y_ring: float, rumah) -> float:
+    atap = rumah.atap or {}
+    ov = float(atap.get("overstek", 600.0))
+    sudut = float(atap.get("kemiringan_derajat", 30.0))
+    rad = math.radians(sudut)
+
+    x_mid = (x_kiri + x_kanan) / 2.0
+    bentang_setengah = (x_kanan - x_kiri) / 2.0
+    tinggi_kuda = bentang_setengah * math.tan(rad)
+    y_puncak = y_ring + tinggi_kuda
+
+    _poly(msp, [(x_kiri, y_ring), (x_kanan, y_ring), (x_kanan, y_ring + 80.0), (x_kiri, y_ring + 80.0)], "A-ROOF", color=30)
+    _poly(msp, [(x_kiri, y_ring + 80.0), (x_kanan, y_ring + 80.0), (x_mid, y_puncak)], "A-ROOF", tutup=True, color=30)
+    _garis(msp, (x_mid, y_ring + 80.0), (x_mid, y_puncak), "A-ROOF", color=30)
+    for frac in (0.33, 0.66):
+        xm_l = x_kiri + (x_mid - x_kiri) * frac
+        ym_l = y_ring + 80.0 + (y_puncak - y_ring - 80.0) * frac
+        _garis(msp, (xm_l, y_ring + 80.0), (xm_l, ym_l), "A-ROOF", color=30)
+        xm_r = x_kanan - (x_kanan - x_mid) * frac
+        _garis(msp, (xm_r, y_ring + 80.0), (xm_r, ym_l), "A-ROOF", color=30)
+        # Diagonal web baja ringan
+        _garis(msp, (xm_l, y_ring + 80.0), (x_mid if frac > 0.5 else x_kiri + (x_mid - x_kiri) * 0.66, ym_l if frac > 0.5 else y_ring + 80.0 + (y_puncak - y_ring - 80.0) * 0.66), "A-ROOF", color=30)
+
+    x_ov_kiri = x_kiri - ov
+    x_ov_kanan = x_kanan + ov
+    y_ov = y_ring - ov * math.tan(rad)
+    tebal_atap = 115.0
+
+    _poly(msp, [(x_ov_kiri, y_ov), (x_mid, y_puncak), (x_mid, y_puncak + tebal_atap), (x_ov_kiri, y_ov + tebal_atap)], "A-ROOF", color=30)
+    _poly(msp, [(x_mid, y_puncak), (x_ov_kanan, y_ov), (x_ov_kanan, y_ov + tebal_atap), (x_mid, y_puncak + tebal_atap)], "A-ROOF", color=30)
+    _poly(msp, [(x_ov_kiri - 30.0, y_ov - 60.0), (x_ov_kiri, y_ov - 60.0), (x_ov_kiri, y_ov + tebal_atap + 20.0), (x_ov_kiri - 30.0, y_ov + tebal_atap + 20.0)], "A-ROOF", color=2)
+    _poly(msp, [(x_ov_kanan, y_ov - 60.0), (x_ov_kanan + 30.0, y_ov - 60.0), (x_ov_kanan + 30.0, y_ov + tebal_atap + 20.0), (x_ov_kanan, y_ov + tebal_atap + 20.0)], "A-ROOF", color=2)
+    return y_puncak + tebal_atap
+
+
+def gambar_potongan(
     rumah,
-    path="hasil/gambar_lengkap.dxf",
-    gambar_perabot: bool = True,
-    info_proyek: Optional[Dict[str, str]] = None,
-    skala_manual: Optional[int] = None,
-    **kwargs,
-):
-    """
-    Denah + potongan + 4 tampak + detail pondasi/kusen dalam satu DXF,
-    masing-masing berbingkai kop A3 dengan skala otomatis proporsional.
-    """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    doc = ezdxf.new("R2018", setup=True)
-    doc.header["$INSUNITS"] = 4
-    msp = doc.modelspace()
+    msp,
+    potongan_cfg: Optional[Dict[str, object]] = None,
+    ox: float = 0.0,
+    oy: float = 0.0,
+    skala_label: str = "1 : 50",
+) -> Tuple[float, float, float, float]:
+    _siapkan_layer_potongan(msp.doc)
+    cfg = potongan_cfg or {"nama": "A-A", "arah": "x"}
+    nama_pot = str(cfg.get("nama", "A-A")).upper()
+    arah = str(cfg.get("arah", "x")).lower()
+    is_2lt = getattr(rumah, "jumlah_lantai", 1) >= 2
 
-    proyek_meta = getattr(rumah, "proyek", {}) or {}
-    info_kop = {
-        "nama_proyek": proyek_meta.get("nama", "Rumah Tinggal Sederhana"),
-        "lokasi": proyek_meta.get("lokasi", "Kab. Magelang, Jawa Tengah"),
-        "klien": proyek_meta.get("klien", "Pemilik Bangunan"),
-        "perencana": proyek_meta.get("perencana", "Rancang.io Engineering Studio"),
-    }
-    if info_proyek:
-        info_kop.update({k: v for k, v in info_proyek.items() if v})
+    x0, y0, x1, y1 = rumah.batas
+    pos_def = (y0 + y1) / 2.0 if arah == "x" else (x0 + x1) / 2.0
+    pos = float(cfg.get("posisi", pos_def))
 
-    gambar_denah(rumah, msp, gambar_perabot=gambar_perabot)
-    _layer(doc)
-    b = _dasar(rumah)
+    s0 = x0 if arah == "x" else y0
+    s1 = x1 if arah == "x" else y1
+    xl = ox + s0
+    xr = ox + s1
+    y_nol = oy
 
-    potongan_list = list(rumah.potongan)
-    total_lembar = 1 + len(potongan_list) + 4 + 1  # Denah + Potongan + 4 Tampak + Detail Pondasi/Kusen
-    pitch_x = 48000.0
-    pitch_y = 36000.0
+    t_lt1 = float(rumah.lantai.get("tinggi_dinding", 3000.0))
+    p_lt1 = float(rumah.lantai.get("tinggi_plafon", 2800.0))
+    t_lt2 = float(rumah.lantai_2.get("tinggi_dinding", 3200.0)) if is_2lt else 0.0
+    p_lt2 = float(rumah.lantai_2.get("tinggi_plafon", 2900.0)) if is_2lt else 0.0
 
-    # 1. Lembar 01: Denah Rencana (Skala adaptif: misal 1:50 untuk Tipe 36)
-    bb_denah = (b["minx"] - 2500.0, b["miny"] - 2500.0, b["maxx"] + 2500.0, b["maxy"] + 2500.0)
-    skala_denah = skala_manual or pilih_skala_otomatis(bb_denah, skala_kandidat=(25, 40, 50, 75, 100, 125, 150))
-    f_d = skala_denah / 100.0
-    cx_denah = (bb_denah[0] + bb_denah[2]) / 2.0
-    cy_denah = (bb_denah[1] + bb_denah[3]) / 2.0
-    ox_denah = cx_denah - 17500.0 * f_d
-    oy_denah = cy_denah - 14850.0 * f_d
+    _garis(msp, (xl - 750.0, y_nol - 150.0), (xr + 750.0, y_nol - 150.0), "A-WALL", color=6)
+    tanah_pts = [(xl + 150.0, y_nol - 420.0), (xr - 150.0, y_nol - 420.0), (xr - 150.0, y_nol - 100.0), (xl + 150.0, y_nol - 100.0)]
+    _poly(msp, tanah_pts, "S-FNDN", color=8)
+    _arsir(msp, tanah_pts, "ANSI31", 55.0, "A-WALL-PATT", color=8)
+    _poly(msp, [(xl, y_nol - 100.0), (xr, y_nol - 100.0), (xr, y_nol), (xl, y_nol)], "S-FNDN", color=4)
 
-    daerah = {}
-    daerah["Denah"] = gambar_kop_a3(
-        msp,
-        ox_denah,
-        oy_denah,
-        judul_lembar="DENAH RENCANA",
-        kode_gambar="ARS-01",
-        nomor_lembar=f"01 / {total_lembar:02d}",
-        skala_num=skala_denah,
-        info_proyek=info_kop,
-        tampilkan_utara=True,
-    )
+    pot_lt1 = _dinding_terpotong_pada_garis(rumah.dinding, arah, pos)
+    if not pot_lt1:
+        pot_lt1 = [(s0, 150.0), (s1, 150.0)]
 
-    # 2. Lembar Potongan A-A, B-B, dst.
-    no_lembar = 2
-    for i, sec in enumerate(potongan_list):
-        ox_anchor = ox_denah + (i + 1) * pitch_x + 12000.0
-        oy_anchor = oy_denah + 6000.0
-        skala_est = skala_manual or 50
-        bb = gambar_potongan(rumah, msp, sec, ox_anchor, oy_anchor, skala_label=f"1 : {skala_est}")
-        if bb:
-            skala_p = skala_manual or pilih_skala_otomatis(bb, skala_kandidat=(25, 40, 50, 60, 75, 100, 125, 150))
-            f_p = skala_p / 100.0
-            cx_p = (bb[0] + bb[2]) / 2.0
-            cy_p = (bb[1] + bb[3]) / 2.0
-            ox_l = cx_p - 17500.0 * f_p
-            oy_l = cy_p - 14850.0 * f_p
+    x_mid_wall = ox + (pot_lt1[1][0] if len(pot_lt1) > 2 else (s0 + s1) / 2.0)
 
-            daerah[f"Potongan {sec['nama']}"] = gambar_kop_a3(
-                msp,
-                ox_l,
-                oy_l,
-                judul_lembar=f"POTONGAN {sec['nama']}",
-                kode_gambar=f"ARS-{no_lembar:02d}",
-                nomor_lembar=f"{no_lembar:02d} / {total_lembar:02d}",
-                skala_num=skala_p,
-                info_proyek=info_kop,
-                tampilkan_utara=False,
-            )
-            no_lembar += 1
+    for cs, tb in pot_lt1:
+        cx_d = ox + cs
+        hw = tb / 2.0
+        _gambar_pondasi_potongan(msp, cx_d, y_nol, rumah, is_2lt)
+        d_pts = [(cx_d - hw, y_nol), (cx_d + hw, y_nol), (cx_d + hw, y_nol + t_lt1), (cx_d - hw, y_nol + t_lt1)]
+        _poly(msp, d_pts, "A-WALL", color=6)
+        _arsir(msp, d_pts, "ANSI31", 40.0, "A-WALL-PATT")
+        if is_2lt:
+            _poly(msp, [(cx_d - 125.0, y_nol), (cx_d + 125.0, y_nol), (cx_d + 125.0, y_nol + t_lt1 + t_lt2), (cx_d - 125.0, y_nol + t_lt1 + t_lt2)], "S-COLS", color=1)
 
-    # 3. Lembar 4 Tampak
-    nama_tampak = {
-        "depan": "TAMPAK DEPAN",
-        "belakang": "TAMPAK BELAKANG",
-        "kanan": "TAMPAK KANAN",
-        "kiri": "TAMPAK KIRI",
-    }
-    for i, sisi in enumerate(["depan", "belakang", "kanan", "kiri"]):
-        ox_anchor = ox_denah + i * pitch_x + 12000.0
-        oy_anchor = oy_denah - pitch_y + 6000.0
-        skala_est = skala_manual or (75 if sisi == "depan" else 50)
-        bb_t = gambar_tampak(rumah, msp, sisi, ox_anchor, oy_anchor, skala_label=f"1 : {skala_est}")
+    y_atas_bgn = y_nol + t_lt1
+    _gambar_interior_potongan(msp, arah, xl, xr, x_mid_wall, y_nol, y_atas_bgn, is_2lt)
 
-        skala_t = skala_manual or pilih_skala_otomatis(bb_t, skala_kandidat=(25, 40, 50, 60, 75, 100, 125, 150))
-        f_t = skala_t / 100.0
-        cx_t = (bb_t[0] + bb_t[2]) / 2.0
-        cy_t = (bb_t[1] + bb_t[3]) / 2.0
-        ox_l = cx_t - 17500.0 * f_t
-        oy_l = cy_t - 14850.0 * f_t
+    if is_2lt:
+        y_lt2 = y_nol + t_lt1
+        t_pelat = float(((rumah.struktur or {}).get("pelat_lantai") or {}).get("tebal", 120.0))
 
-        daerah[f"Tampak {sisi}"] = gambar_kop_a3(
-            msp,
-            ox_l,
-            oy_l,
-            judul_lembar=nama_tampak[sisi],
-            kode_gambar=f"ARS-{no_lembar:02d}",
-            nomor_lembar=f"{no_lembar:02d} / {total_lembar:02d}",
-            skala_num=skala_t,
-            info_proyek=info_kop,
-            tampilkan_utara=False,
-        )
-        no_lembar += 1
+        n_tg = int(rumah.tangga.jumlah_anak_tangga) if rumah.tangga else 15
+        xv0, xv1 = _gambar_tangga_potongan_sinkron(msp, arah, xl, xr, x_mid_wall, y_nol, y_lt2, t_pelat, n_tg)
 
-    # 4. Lembar Terakhir: Detail Pondasi, Kolom & Jadwal Kusen (Skala Besar 1:20)
-    skala_det = 20
-    ox_det = ox_denah + 4 * pitch_x
-    oy_det = oy_denah - pitch_y
-    gambar_lembar_detail(rumah, msp, ox_det, oy_det, skala_num=skala_det)
-    daerah["Detail Pondasi & Kusen"] = gambar_kop_a3(
-        msp,
-        ox_det,
-        oy_det,
-        judul_lembar="DETAIL PONDASI, KOLOM & KUSEN",
-        kode_gambar=f"ARS-{no_lembar:02d}",
-        nomor_lembar=f"{no_lembar:02d} / {total_lembar:02d}",
-        skala_num=skala_det,
-        info_proyek=info_kop,
-        tampilkan_utara=False,
-    )
+        segmen_pelat: List[Tuple[float, float]] = []
+        if xv0 > xl - 50.0:
+            segmen_pelat.append((xl - 125.0, xv0))
+        if xv1 < xr + 50.0:
+            segmen_pelat.append((xv1, xr + 125.0))
+        for sp0, sp1 in segmen_pelat:
+            if sp1 - sp0 > 80.0:
+                p_pts = [(sp0, y_lt2 - t_pelat), (sp1, y_lt2 - t_pelat), (sp1, y_lt2), (sp0, y_lt2)]
+                _poly(msp, p_pts, "S-COLS", color=1)
+                _arsir(msp, p_pts, "AR-CONC", 22.0, "S-COLS", color=1)
 
-    base_stem = path.stem
-    for urut in range(1, 50):
-        kandidat = path if urut == 1 else path.with_name(f"{base_stem}_v{urut}{path.suffix}")
-        try:
-            doc.saveas(str(kandidat))
-            path = kandidat
-            break
-        except PermissionError:
-            continue
+        if xv0 > xl + 200.0:
+            _garis(msp, (xl + 100.0, y_nol + p_lt1), (xv0 - 50.0, y_nol + p_lt1), "A-WALL", color=6)
+
+        pot_lt2 = _dinding_terpotong_pada_garis(rumah.dinding_lt2, arah, pos)
+        if not pot_lt2:
+            pot_lt2 = [(s0, 150.0), (s1, 150.0)]
+        for cs2, tb2 in pot_lt2:
+            cx_d2 = ox + cs2
+            hw2 = tb2 / 2.0
+            b_pts = [(cx_d2 - 100.0, y_lt2 - 350.0), (cx_d2 + 100.0, y_lt2 - 350.0), (cx_d2 + 100.0, y_lt2 - t_pelat), (cx_d2 - 100.0, y_lt2 - t_pelat)]
+            _poly(msp, b_pts, "S-COLS", color=1)
+            _arsir(msp, b_pts, "AR-CONC", 22.0, "S-COLS", color=1)
+            d2_pts = [(cx_d2 - hw2, y_lt2), (cx_d2 + hw2, y_lt2), (cx_d2 + hw2, y_lt2 + t_lt2), (cx_d2 - hw2, y_lt2 + t_lt2)]
+            _poly(msp, d2_pts, "A-WALL", color=6)
+            _arsir(msp, d2_pts, "ANSI31", 40.0, "A-WALL-PATT")
+
+        _garis(msp, (xl, y_lt2 + p_lt2), (xr, y_lt2 + p_lt2), "A-WALL", color=6)
+        y_atas_bgn = y_lt2 + t_lt2
+        rb_pts = [(xl - 100.0, y_atas_bgn - 200.0), (xr + 100.0, y_atas_bgn - 200.0), (xr + 100.0, y_atas_bgn), (xl - 100.0, y_atas_bgn)]
+        _poly(msp, rb_pts, "S-COLS", color=1)
+        _arsir(msp, rb_pts, "AR-CONC", 22.0, "S-COLS", color=1)
     else:
-        raise PermissionError(
-            f"File {base_stem}*.dxf sedang terkunci di AutoCAD. Tutup tab gambar lama di AutoCAD terlebih dahulu."
-        )
-    return path, daerah
+        _garis(msp, (xl, y_nol + p_lt1), (xr, y_nol + p_lt1), "A-WALL", color=6)
+        rb_pts = [(xl - 75.0, y_atas_bgn - 150.0), (xr + 75.0, y_atas_bgn - 150.0), (xr + 75.0, y_atas_bgn), (xl - 75.0, y_atas_bgn)]
+        _poly(msp, rb_pts, "S-COLS", color=1)
+        _arsir(msp, rb_pts, "AR-CONC", 22.0, "S-COLS", color=1)
+
+    y_puncak = _gambar_rangka_atap_pelana(msp, xl, xr, y_atas_bgn, rumah)
+
+    x_lbl = xl - 1150.0
+    _callout_kiri(msp, ((xl + (xl + xr) / 2.0) / 2.0, (y_atas_bgn + y_puncak) / 2.0 + 180.0), x_lbl, y_puncak - 120.0, "PENUTUP ATAP GENTENG")
+    _callout_kiri(msp, (xl + (xr - xl) * 0.25, y_atas_bgn + 240.0), x_lbl, y_atas_bgn + 480.0, "KUDA-KUDA BAJA RINGAN")
+    _callout_kiri(msp, (xl, y_atas_bgn - 100.0), x_lbl, y_atas_bgn - 80.0, "RING BALK 15/20")
+    if is_2lt:
+        _callout_kiri(msp, (xl + 400.0, y_nol + t_lt1 + p_lt2), x_lbl, y_nol + t_lt1 + p_lt2 - 260.0, f"PLAFOND +{(t_lt1 + p_lt2)/1000:.2f}")
+        _callout_kiri(msp, (xl + 450.0, y_nol + t_lt1 - 60.0), x_lbl, y_nol + t_lt1 + 160.0, "PELAT LANTAI t=12 cm")
+        _callout_kiri(msp, (xl, y_nol + t_lt1 - 240.0), x_lbl, y_nol + t_lt1 - 380.0, "BALOK INDUK 20/35")
+        _callout_kiri(msp, (xl, y_nol + t_lt1 * 0.45), x_lbl, y_nol + t_lt1 * 0.45, "DINDING 1/2 BATA")
+        _callout_kiri(msp, (xl, y_nol - 150.0), x_lbl, y_nol - 280.0, "SLOOF 20/30")
+        _callout_kiri(msp, (xl - 250.0, y_nol - 1050.0), x_lbl, y_nol - 980.0, "FOOTPLAT 100x100x25")
+    else:
+        _callout_kiri(msp, (xl + 400.0, y_nol + p_lt1), x_lbl, y_nol + p_lt1 - 260.0, f"PLAFOND +{p_lt1/1000:.2f}")
+        _callout_kiri(msp, (xl, y_nol + t_lt1 * 0.45), x_lbl, y_nol + t_lt1 * 0.45, "DINDING 1/2 BATA")
+        _callout_kiri(msp, (xl, y_nol - 100.0), x_lbl, y_nol - 260.0, "SLOOF 15/20")
+        _callout_kiri(msp, (xl - 150.0, y_nol - 550.0), x_lbl, y_nol - 680.0, "PONDASI BATU KALI")
+
+    x_datum = xr + 1050.0
+    _garis(msp, (x_datum, y_nol - 1300.0), (x_datum, y_puncak + 300.0), "A-ANNO-SYMB", color=8)
+    _simbol_elevasi_kanan(msp, xr, x_datum, y_nol, 0.0)
+    if is_2lt:
+        _simbol_elevasi_kanan(msp, xr, x_datum, y_nol - 1200.0, -1.20)
+        _simbol_elevasi_kanan(msp, xr, x_datum, y_nol + t_lt1, t_lt1 / 1000.0)
+        _simbol_elevasi_kanan(msp, xr, x_datum, y_atas_bgn, (t_lt1 + t_lt2) / 1000.0)
+    else:
+        _simbol_elevasi_kanan(msp, xr, x_datum, y_nol - 900.0, -0.90)
+        _simbol_elevasi_kanan(msp, xr, x_datum, y_atas_bgn, t_lt1 / 1000.0)
+    _simbol_elevasi_kanan(msp, (xl + xr) / 2.0, x_datum, y_puncak, (y_puncak - y_nol) / 1000.0)
+
+    for idx_c in range(len(pot_lt1) - 1):
+        _dim_horizontal(msp, ox + pot_lt1[idx_c][0], ox + pot_lt1[idx_c + 1][0], y_nol - 1450.0)
+    _dim_horizontal(msp, xl, xr, y_nol - 1820.0)
+
+    cx_j = (xl + xr) / 2.0
+    y_j = y_nol - 2450.0
+    _teks(msp, f"POTONGAN {nama_pot}", (cx_j, y_j), tinggi=185.0, color=2)
+    _garis(msp, (cx_j - 950.0, y_j - 125.0), (cx_j + 950.0, y_j - 125.0), "A-ANNO-TEXT", color=2)
+    _teks(msp, f"Skala {skala_label}", (cx_j, y_j - 260.0), tinggi=115.0, color=2)
+
+    return (xl - 2600.0, y_j - 450.0, x_datum + 750.0, y_puncak + 450.0)
 
 
-# ----------------------------------------------------------------- ekspor PDF A3 multi-halaman
-class _PropProxy:
-    """Wrapper properti render agar warna garis/teks dapat diubah tanpa menimpa atribut read-only."""
+def _gambar_pintu_tampak(msp, x: float, y: float, w: float = 900.0, h: float = 2100.0, dengan_kanopi: bool = True) -> None:
+    """Menggambar pintu tampak berpanel kayu dengan kusen, handle, dan topi-topi kanopi."""
+    kw = 60.0
+    _poly(msp, [(x, y), (x + w, y), (x + w, y + h), (x, y + h)], "A-DOOR", color=1)
+    _poly(msp, [(x + kw, y), (x + w - kw, y), (x + w - kw, y + h - kw), (x + kw, y + h - kw)], "A-DOOR", color=1)
+    # Panel atas & bawah daun pintu
+    _poly(msp, [(x + 150.0, y + 1050.0), (x + w - 150.0, y + 1050.0), (x + w - 150.0, y + h - 160.0), (x + 150.0, y + h - 160.0)], "A-DOOR", color=1)
+    _poly(msp, [(x + 150.0, y + 180.0), (x + w - 150.0, y + 180.0), (x + w - 150.0, y + 920.0), (x + 150.0, y + 920.0)], "A-DOOR", color=1)
+    # Handle pintu
+    _garis(msp, (x + w - 140.0, y + 950.0), (x + w - 140.0, y + 1080.0), "A-DOOR", color=2)
+    if dengan_kanopi:
+        _poly(msp, [(x - 140.0, y + h), (x + w + 140.0, y + h), (x + w + 140.0, y + h + 110.0), (x - 140.0, y + h + 110.0)], "S-COLS", color=2)
 
-    def __init__(self, orig, color):
-        self._orig = orig
-        self.color = color
 
-    def __getattr__(self, name):
-        return getattr(self._orig, name)
+def _gambar_jendela_tampak(msp, x: float, y: float, w: float = 1200.0, h: float = 1350.0, dua_daun: bool = True, dengan_kanopi: bool = True) -> None:
+    """Menggambar jendela tampak lengkap dengan kusen, daun kaca, bovenlicht, dan ambang bawah."""
+    kw = 55.0
+    _poly(msp, [(x, y), (x + w, y), (x + w, y + h), (x, y + h)], "A-GLAZ", color=4)
+    _poly(msp, [(x + kw, y + kw), (x + w - kw, y + kw), (x + w - kw, y + h - kw), (x + kw, y + h - kw)], "A-GLAZ", color=4)
+    if dua_daun:
+        xm = x + w / 2.0
+        _poly(msp, [(xm - 25.0, y + kw), (xm + 25.0, y + kw), (xm + 25.0, y + h - kw), (xm - 25.0, y + h - kw)], "A-GLAZ", color=4)
+    # Garis bovenlicht atas
+    yb = y + h - 360.0
+    _garis(msp, (x + kw, yb), (x + w - kw, yb), "A-GLAZ", color=4)
+    # Ambang bawah jendela
+    _poly(msp, [(x - 70.0, y - 60.0), (x + w + 70.0, y - 60.0), (x + w + 70.0, y), (x - 70.0, y)], "A-WALL", color=2)
+    if dengan_kanopi:
+        _poly(msp, [(x - 120.0, y + h), (x + w + 120.0, y + h), (x + w + 120.0, y + h + 100.0), (x - 120.0, y + h + 100.0)], "S-COLS", color=2)
 
 
-class _PlotPutihBackend(MatplotlibBackend):
-    """Plot style CAD hitam/tinta gelap di atas kertas putih A3 (menyerupai CTB AutoCAD)."""
+def gambar_tampak(
+    rumah,
+    msp,
+    sisi: str = "depan",
+    ox: float = 0.0,
+    oy: float = 0.0,
+    skala_label: str = "1 : 50",
+) -> Tuple[float, float, float, float]:
+    """Merender Tampak Depan, Belakang, Kanan, dan Kiri secara natural, berproporsi, dan estetis."""
+    _siapkan_layer_potongan(msp.doc)
+    sisi_l = sisi.lower().strip()
+    is_2lt = getattr(rumah, "jumlah_lantai", 1) >= 2
+    x0, y0, x1, y1 = rumah.batas
 
-    @staticmethod
-    def _tinta_gelap(color: str) -> str:
-        if not isinstance(color, str) or not color.startswith("#") or len(color) < 7:
-            return color
-        try:
-            r = int(color[1:3], 16) / 255.0
-            g = int(color[3:5], 16) / 255.0
-            b = int(color[5:7], 16) / 255.0
-        except ValueError:
-            return color
+    is_lebar_x = sisi_l in ("depan", "belakang")
+    bentang = (x1 - x0) if is_lebar_x else (y1 - y0)
+    xl = ox + (x0 if is_lebar_x else y0)
+    xr = xl + bentang
+    y_nol = oy
 
-        lum = 0.299 * r + 0.587 * g + 0.114 * b
-        if lum > 0.72:
-            # Putih (#ffffff) -> Hitam pekat; Kuning -> Cokelat tua; Cyan -> Biru tua
-            if r > 0.85 and g > 0.85 and b > 0.85:
-                return "#0F172A"
-            if r > 0.80 and g > 0.80 and b < 0.35:
-                return "#78350F"
-            if b > 0.80 and g > 0.80 and r < 0.35:
-                return "#0369A1"
-            return "#1E293B"
-        return color
+    t_lt1 = float(rumah.lantai.get("tinggi_dinding", 3000.0))
+    t_lt2 = float(rumah.lantai_2.get("tinggi_dinding", 3200.0)) if is_2lt else 0.0
+    t_tot = t_lt1 + t_lt2
 
-    def _gelapkan(self, properties):
-        return _PropProxy(properties, self._tinta_gelap(getattr(properties, "color", "#0F172A")))
+    # Muka tanah & plinth dasar bangunan
+    _garis(msp, (xl - 900.0, y_nol - 150.0), (xr + 900.0, y_nol - 150.0), "A-WALL", color=6)
+    _poly(msp, [(xl - 80.0, y_nol - 150.0), (xr + 80.0, y_nol - 150.0), (xr + 80.0, y_nol), (xl - 80.0, y_nol)], "S-FNDN", color=4)
 
-    def set_background(self, color: str) -> None:
-        super().set_background("#FFFFFF")
+    # Massa dinding Lantai 1 & Lantai 2
+    _poly(msp, [(xl, y_nol), (xr, y_nol), (xr, y_nol + t_lt1), (xl, y_nol + t_lt1)], "A-WALL", color=6)
+    if is_2lt:
+        _poly(msp, [(xl, y_nol + t_lt1), (xr, y_nol + t_lt1), (xr, y_nol + t_tot), (xl, y_nol + t_tot)], "A-WALL", color=6)
+        # Ban-banan garis pelat lantai 2
+        _poly(msp, [(xl - 60.0, y_nol + t_lt1 - 140.0), (xr + 60.0, y_nol + t_lt1 - 140.0), (xr + 60.0, y_nol + t_lt1 + 30.0), (xl - 60.0, y_nol + t_lt1 + 30.0)], "A-WALL", color=2)
 
-    def draw_point(self, pos, properties):
-        super().draw_point(pos, self._gelapkan(properties))
+    if is_lebar_x:
+        if sisi_l == "depan":
+            # --- TAMPAK DEPAN ---
+            # Pilar teras kiri & undakan tangga teras
+            _poly(msp, [(xl, y_nol), (xl + 240.0, y_nol), (xl + 240.0, y_nol + t_lt1), (xl, y_nol + t_lt1)], "S-COLS", color=2)
+            _poly(msp, [(xl + 800.0, y_nol - 150.0), (xl + 2400.0, y_nol - 150.0), (xl + 2400.0, y_nol - 75.0), (xl + 800.0, y_nol - 75.0)], "A-WALL", color=8)
 
-    def draw_line(self, start, end, properties):
-        super().draw_line(start, end, self._gelapkan(properties))
+            # Pintu Utama berpanel + Sidelight kaca samping
+            px = xl + 1100.0
+            _gambar_pintu_tampak(msp, px, y_nol, w=900.0, h=2100.0, dengan_kanopi=False)
+            _poly(msp, [(px + 900.0, y_nol + 450.0), (px + 1280.0, y_nol + 450.0), (px + 1280.0, y_nol + 2100.0), (px + 900.0, y_nol + 2100.0)], "A-GLAZ", color=4)
+            _poly(msp, [(px - 150.0, y_nol + 2100.0), (px + 1430.0, y_nol + 2100.0), (px + 1430.0, y_nol + 2210.0), (px - 150.0, y_nol + 2210.0)], "S-COLS", color=2)
 
-    def draw_solid_lines(self, lines, properties):
-        if hasattr(super(), "draw_solid_lines"):
-            super().draw_solid_lines(lines, self._gelapkan(properties))
+            # Jendela Kamar Tidur 1 kanan bawah
+            _gambar_jendela_tampak(msp, xl + 3650.0, y_nol + 700.0, w=1400.0, h=1400.0, dua_daun=True, dengan_kanopi=True)
+
+            if is_2lt:
+                y2 = y_nol + t_lt1
+                # Pintu akses Balkon + Jendela Kamar Tidur Anak kanan atas
+                _gambar_pintu_tampak(msp, xl + 1100.0, y2, w=800.0, h=2100.0, dengan_kanopi=True)
+                _gambar_jendela_tampak(msp, xl + 3750.0, y2 + 700.0, w=1400.0, h=1400.0, dua_daun=True, dengan_kanopi=True)
+
+                # Balkon kantilever depan kiri (x = 0..3000)
+                bx_e = xl + 3000.0
+                _poly(msp, [(xl - 80.0, y2 - 140.0), (bx_e, y2 - 140.0), (bx_e, y2 + 30.0), (xl - 80.0, y2 + 30.0)], "S-COLS", color=2)
+                _poly(msp, [(xl - 60.0, y2 + 30.0), (bx_e, y2 + 30.0), (bx_e, y2 + 980.0), (xl - 60.0, y2 + 980.0)], "A-FLOR-STRS", color=3)
+                _garis(msp, (xl - 60.0, y2 + 920.0), (bx_e, y2 + 920.0), "A-FLOR-STRS", color=3)
+                for ib in range(1, 16):
+                    xb = xl - 60.0 + ib * ((bx_e - xl + 60.0) / 16.0)
+                    _garis(msp, (xb, y2 + 30.0), (xb, y2 + 920.0), "A-FLOR-STRS", color=3)
         else:
-            prop_baru = self._gelapkan(properties)
-            for s, e in lines:
-                super().draw_line(s, e, prop_baru)
+            # --- TAMPAK BELAKANG ---
+            _gambar_jendela_tampak(msp, xl + 1000.0, y_nol + 800.0, w=1200.0, h=1300.0, dua_daun=True, dengan_kanopi=True)
+            _gambar_jendela_tampak(msp, xl + 3300.0, y_nol + 800.0, w=1100.0, h=1300.0, dua_daun=True, dengan_kanopi=True)
+            # Bovenlicht KM/WC Lt.1
+            _poly(msp, [(xr - 1100.0, y_nol + 1850.0), (xr - 500.0, y_nol + 1850.0), (xr - 500.0, y_nol + 2250.0), (xr - 1100.0, y_nol + 2250.0)], "A-GLAZ", color=4)
+            if is_2lt:
+                y2 = y_nol + t_lt1
+                _gambar_jendela_tampak(msp, xl + 1000.0, y2 + 800.0, w=1200.0, h=1300.0, dua_daun=True, dengan_kanopi=True)
+                _gambar_jendela_tampak(msp, xl + 3300.0, y2 + 800.0, w=1100.0, h=1300.0, dua_daun=True, dengan_kanopi=True)
+                _poly(msp, [(xr - 1100.0, y2 + 1850.0), (xr - 500.0, y2 + 1850.0), (xr - 500.0, y2 + 2250.0), (xr - 1100.0, y2 + 2250.0)], "A-GLAZ", color=4)
+    else:
+        # --- TAMPAK SAMPING KANAN & KIRI ---
+        _gambar_jendela_tampak(msp, xl + bentang * 0.22, y_nol + 800.0, w=1200.0, h=1300.0, dua_daun=True, dengan_kanopi=True)
+        _gambar_jendela_tampak(msp, xl + bentang * 0.64, y_nol + 800.0, w=1200.0, h=1300.0, dua_daun=True, dengan_kanopi=True)
 
-    def draw_path(self, path, properties):
-        super().draw_path(path, self._gelapkan(properties))
+        if is_2lt:
+            y2 = y_nol + t_lt1
+            _gambar_jendela_tampak(msp, xl + bentang * 0.22, y2 + 800.0, w=1200.0, h=1300.0, dua_daun=True, dengan_kanopi=True)
+            _gambar_jendela_tampak(msp, xl + bentang * 0.64, y2 + 800.0, w=1200.0, h=1300.0, dua_daun=True, dengan_kanopi=True)
 
-    def draw_filled_paths(self, paths, properties):
-        super().draw_filled_paths(paths, self._gelapkan(properties))
+            # Profil samping Balkon Depan (di sisi kiri untuk Tampak Kanan, sisi kanan untuk Tampak Kiri)
+            if sisi_l == "kanan":
+                _poly(msp, [(xl - 1500.0, y2 - 140.0), (xl, y2 - 140.0), (xl, y2 + 30.0), (xl - 1500.0, y2 + 30.0)], "S-COLS", color=2)
+                _poly(msp, [(xl - 1500.0, y2 + 30.0), (xl, y2 + 30.0), (xl, y2 + 980.0), (xl - 1500.0, y2 + 980.0)], "A-FLOR-STRS", color=3)
+                for ib in range(1, 9):
+                    xb = xl - ib * (1500.0 / 9.0)
+                    _garis(msp, (xb, y2 + 30.0), (xb, y2 + 980.0), "A-FLOR-STRS", color=3)
+            else:
+                _poly(msp, [(xr, y2 - 140.0), (xr + 1500.0, y2 - 140.0), (xr + 1500.0, y2 + 30.0), (xr, y2 + 30.0)], "S-COLS", color=2)
+                _poly(msp, [(xr, y2 + 30.0), (xr + 1500.0, y2 + 30.0), (xr + 1500.0, y2 + 980.0), (xr, y2 + 980.0)], "A-FLOR-STRS", color=3)
+                for ib in range(1, 9):
+                    xb = xr + ib * (1500.0 / 9.0)
+                    _garis(msp, (xb, y2 + 30.0), (xb, y2 + 980.0), "A-FLOR-STRS", color=3)
 
-    def draw_filled_polygon(self, points, properties):
-        super().draw_filled_polygon(points, self._gelapkan(properties))
+    # Atap Pelana Proporsional
+    atap = rumah.atap or {}
+    ov = float(atap.get("overstek", 600.0))
+    sudut = float(atap.get("kemiringan_derajat", 30.0))
+    rad = math.radians(sudut)
+    y_ring = y_nol + t_tot
 
-    def draw_text(self, text, transform, properties, cap_height):
-        super().draw_text(text, transform, self._gelapkan(properties), cap_height)
+    if is_lebar_x:
+        bentang_samping = (y1 - y0) / 2.0
+        tinggi_atap = bentang_samping * math.tan(rad)
+        y_bub = y_ring + tinggi_atap
+        y_ov = y_ring - ov * math.tan(rad)
+        # Bidang genteng + lisplank bawah & bubungan atas
+        _poly(msp, [(xl - ov, y_ov), (xr + ov, y_ov), (xr + ov, y_bub), (xl - ov, y_bub)], "A-ROOF", color=30)
+        _poly(msp, [(xl - ov, y_ov - 160.0), (xr + ov, y_ov - 160.0), (xr + ov, y_ov), (xl - ov, y_ov)], "A-ROOF", color=2)
+        _poly(msp, [(xl - ov, y_bub - 110.0), (xr + ov, y_bub - 110.0), (xr + ov, y_bub), (xl - ov, y_bub)], "A-ROOF", color=2)
+        # Garis susunan genteng horizontal halus (layer A-ROOF-PATT warna abu-abu)
+        n_baris = max(7, int((y_bub - 110.0 - y_ov) / 280.0))
+        for k in range(1, n_baris):
+            yk = y_ov + k * ((y_bub - 110.0 - y_ov) / n_baris)
+            _garis(msp, (xl - ov, yk), (xr + ov, yk), "A-ROOF-PATT", color=8)
+        y_puncak = y_bub
+    else:
+        bentang_setengah = bentang / 2.0
+        tinggi_atap = bentang_setengah * math.tan(rad)
+        y_bub = y_ring + tinggi_atap
+        y_ov = y_ring - ov * math.tan(rad)
+        x_mid = (xl + xr) / 2.0
+        # Kemiringan atap pelana + lisplank miring
+        _poly(msp, [(xl - ov, y_ov), (x_mid, y_bub), (xr + ov, y_ov), (xr + ov, y_ov + 140.0), (x_mid, y_bub + 140.0), (xl - ov, y_ov + 140.0)], "A-ROOF", color=30)
+        # Dinding segitiga sopi-sopi + lubang angin ventilasi segitiga
+        _poly(msp, [(xl, y_ring), (xr, y_ring), (x_mid, y_bub)], "A-WALL", color=6)
+        _poly(msp, [(x_mid - 360.0, y_ring + 350.0), (x_mid + 360.0, y_ring + 350.0), (x_mid, y_ring + 820.0)], "A-GLAZ", color=4)
+        y_puncak = y_bub + 140.0
 
+    # Elevasi datum di sisi kanan + dimensi lebar bawah
+    x_datum = xr + (1850.0 if (is_2lt and sisi_l == "kiri") else 1000.0)
+    _garis(msp, (x_datum, y_nol - 250.0), (x_datum, y_puncak + 300.0), "A-ANNO-SYMB", color=8)
+    _simbol_elevasi_kanan(msp, xr, x_datum, y_nol, 0.0)
+    if is_2lt:
+        _simbol_elevasi_kanan(msp, xr, x_datum, y_nol + t_lt1, t_lt1 / 1000.0)
+    _simbol_elevasi_kanan(msp, xr, x_datum, y_ring, t_tot / 1000.0)
+    _simbol_elevasi_kanan(msp, (xl + xr) / 2.0, x_datum, y_puncak, (y_puncak - y_nol) / 1000.0)
 
-def ekspor_paket_pdf(
-    path_dxf,
-    daerah: Dict[str, Tuple[float, float, float, float]],
-    path_pdf="hasil/Gambar_Kerja_A3.pdf",
-    dpi: int = 200,
-) -> Path:
-    """Merender seluruh lembar A3 dari file DXF menjadi 1 file PDF multi-halaman siap cetak."""
-    path_pdf = Path(path_pdf)
-    path_pdf.parent.mkdir(parents=True, exist_ok=True)
-    doc = ezdxf.readfile(str(path_dxf))
-    msp = doc.modelspace()
+    _dim_horizontal(msp, xl, xr, y_nol - 550.0)
+    cx_j = (xl + xr) / 2.0
+    y_j = y_nol - 1150.0
+    _teks(msp, f"TAMPAK {sisi_l.upper()}", (cx_j, y_j), tinggi=185.0, color=2)
+    _garis(msp, (cx_j - 950.0, y_j - 125.0), (cx_j + 950.0, y_j - 125.0), "A-ANNO-TEXT", color=2)
+    _teks(msp, f"Skala {skala_label}", (cx_j, y_j - 260.0), tinggi=115.0, color=2)
 
-    # Ukuran fisik kertas A3 landscape dalam inci (420 mm x 297 mm)
-    a3_w_in = 420.0 / 25.4
-    a3_h_in = 297.0 / 25.4
-
-    def _tulis_pdf(target: Path):
-        with PdfPages(str(target)) as pdf:
-            for _, (x0, y0, x1, y1) in daerah.items():
-                fig = plt.figure(figsize=(a3_w_in, a3_h_in))
-                fig.patch.set_facecolor("#FFFFFF")
-                ax = fig.add_axes([0, 0, 1, 1])
-                ax.set_facecolor("#FFFFFF")
-                Frontend(RenderContext(doc), _PlotPutihBackend(ax)).draw_layout(msp)
-                ax.set_aspect("equal", adjustable="box")
-                ax.set_xlim(x0, x1)
-                ax.set_ylim(y0, y1)
-                ax.axis("off")
-                pdf.savefig(fig, dpi=dpi, facecolor="#FFFFFF")
-                plt.close(fig)
-
-    try:
-        _tulis_pdf(path_pdf)
-    except PermissionError:
-        path_pdf = path_pdf.with_name(path_pdf.stem + "_baru" + path_pdf.suffix)
-        _tulis_pdf(path_pdf)
-    return path_pdf
+    return (xl - 1800.0, y_j - 450.0, x_datum + 750.0, y_puncak + 450.0)

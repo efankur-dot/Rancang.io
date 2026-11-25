@@ -1,59 +1,29 @@
 """
-Modul Kop Gambar Kerja Standar Proyek Konsultan (Kertas A3 Skala Adaptif).
-- Ukuran fisik kertas A3: 420 x 297 mm.
-- Pada skala 1 : S, ukuran modelspace bingkai luar adalah (420 * S) x (297 * S) mm,
-  sehingga koordinat bangunan tetap 1:1 mm (akurat saat diukur di AutoCAD) sementara
-  proporsi teks dan garis kop selalu konsisten saat dicetak ke kertas A3.
+Modul Kop Gambar A3 & Penyusun Paket Multi-Lembar Kerja (.DXF) + Pratinjau Gambar.
 """
-
-from datetime import datetime
-from typing import Dict, Optional, Sequence, Tuple
+import datetime
+import io
+from typing import Any, Dict, List, Optional, Tuple
 
 import ezdxf
+from ezdxf.addons.drawing import Frontend, RenderContext
+from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+from ezdxf.enums import TextEntityAlignment as TA
+import matplotlib.pyplot as plt
 
-LEBAR_A3 = 42000.0
-TINGGI_A3 = 29700.0
-MARGIN_KIRI = 1500.0
-MARGIN_LUAR = 1000.0
-LEBAR_KOP = 7500.0
-
-SKALA_STANDAR: Tuple[int, ...] = (10, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 200)
-
-
-def pilih_skala_otomatis(
-    bbox: Tuple[float, float, float, float],
-    skala_kandidat: Sequence[int] = SKALA_STANDAR,
-    margin_rasio: float = 1.08,
-) -> int:
-    """
-    Memilih skala standar terbaik (penyebut S terkecil) agar bbox gambar muat nyaman
-    di dalam viewport bersih kertas A3 (320 mm x 277 mm pada kertas).
-    """
-    x0, y0, x1, y1 = bbox
-    w_req = max(1.0, (x1 - x0) * margin_rasio)
-    h_req = max(1.0, (y1 - y0) * margin_rasio)
-
-    # Viewport bersih pada kertas A3 = 320 mm x 277 mm
-    for s in sorted(skala_kandidat):
-        if (320.0 * s) >= w_req and (277.0 * s) >= h_req:
-            return int(s)
-    return int(max(skala_kandidat))
+from drawing.denah import gambar_denah_lantai
+from drawing.detail import gambar_detail
+from drawing.potongan import gambar_potongan, gambar_tampak
 
 
-def siapkan_layer_kop(doc: ezdxf.document.Drawing) -> None:
-    """Menyiapkan layer dan text style bersih untuk garis tepi dan kop konsultan."""
-    layers = [
-        {"name": "A-ANNO-KOP", "color": 7},        # Putih/Hitam (Garis bingkai & sekat utama)
-        {"name": "A-ANNO-KOP-THIN", "color": 8},   # Abu-abu (Garis tepi luar & sub-sekat tipis)
-        {"name": "A-ANNO-KOP-LABEL", "color": 8},  # Abu-abu terang (Label header kecil)
-        {"name": "A-ANNO-KOP-TEXT", "color": 7},   # Putih/Hitam (Isi data utama)
-        {"name": "A-ANNO-KOP-ACCENT", "color": 4}, # Cyan (Judul proyek, judul lembar & kode)
-    ]
-    for l in layers:
-        if l["name"] not in doc.layers:
-            doc.layers.add(name=l["name"], color=l["color"])
-        else:
-            doc.layers.get(l["name"]).dxf.color = l["color"]
+def _siapkan_layer_kop(doc: ezdxf.document.Drawing) -> None:
+    for nama, warna in [
+        ("A-ANNO-TITL", 7),
+        ("A-ANNO-TEXT", 2),
+        ("A-ANNO-DIMS", 3),
+    ]:
+        if nama not in doc.layers:
+            doc.layers.add(nama, color=warna)
 
     if "KOP_FONT" not in doc.styles:
         try:
@@ -62,318 +32,276 @@ def siapkan_layer_kop(doc: ezdxf.document.Drawing) -> None:
             doc.styles.new("KOP_FONT")
 
 
-def hitung_viewport_kop(
-    ox: float, oy: float, skala_num: int = 100
+def _gambar_bingkai_kop_a3(
+    msp,
+    x0: float,
+    y0: float,
+    skala: float,
+    meta: Dict[str, str],
 ) -> Tuple[float, float, float, float]:
-    """Mengembalikan batas area gambar bersih (vx0, vy0, vx1, vy1) di sebelah kiri kop."""
-    f = skala_num / 100.0
-    vx0 = ox + MARGIN_KIRI * f
-    vy0 = oy + MARGIN_LUAR * f
-    vx1 = ox + (LEBAR_A3 - MARGIN_LUAR - LEBAR_KOP) * f
-    vy1 = oy + (TINGGI_A3 - MARGIN_LUAR) * f
-    return (vx0, vy0, vx1, vy1)
+    """Menggambar bingkai kertas A3 (420 x 297 mm) diskalakan dengan `skala` + blok kop kanan."""
+    W = 420.0 * skala
+    H = 297.0 * skala
+    m_kiri = 15.0 * skala
+    m_lain = 8.0 * skala
+    w_kop = 74.0 * skala
 
+    bx0, by0 = x0 + m_kiri, y0 + m_lain
+    bx1, by1 = x0 + W - m_lain, y0 + H - m_lain
+    kx0 = bx1 - w_kop
 
-def _tambah_teks(
-    msp,
-    teks: str,
-    pos: Tuple[float, float],
-    tinggi: float,
-    layer: str = "A-ANNO-KOP-TEXT",
-    lebar_maks: float = 6900.0,
-    anchor: int = 5,
-    spasi_baris: float = 1.3,
-) -> None:
-    """Helper penempatan MTEXT berformat rapi di dalam sel kop."""
+    msp.add_lwpolyline([(x0, y0), (x0 + W, y0), (x0 + W, y0 + H), (x0, y0 + H)], close=True, dxfattribs={"layer": "A-ANNO-TITL", "color": 8})
+    msp.add_lwpolyline([(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)], close=True, dxfattribs={"layer": "A-ANNO-TITL", "lineweight": 35})
+    msp.add_line((kx0, by0), (kx0, by1), dxfattribs={"layer": "A-ANNO-TITL", "lineweight": 35})
+
     style_name = "KOP_FONT" if "KOP_FONT" in msp.doc.styles else "Standard"
-    mt = msp.add_mtext(
-        teks,
-        dxfattribs={
-            "layer": layer,
-            "style": style_name,
-            "char_height": tinggi,
-            "width": lebar_maks,
-            "attachment_point": anchor,
-            "line_spacing_factor": spasi_baris,
-        },
-    )
-    mt.set_location(pos)
+
+    def teks_kop(isi: str, px: float, py: float, h_mm: float, rata=TA.MIDDLE_CENTER, warna: int = 7):
+        msp.add_text(
+            isi,
+            height=h_mm * skala,
+            dxfattribs={"layer": "A-ANNO-TEXT", "style": style_name, "color": warna},
+        ).set_placement((px, py), align=rata)
+
+    cx_k = (kx0 + bx1) / 2.0
+    tinggi_tot = by1 - by0
+    rasio_sekat = [0.16, 0.34, 0.56, 0.72, 0.86]
+    ys_sekat = [by1 - r * tinggi_tot for r in rasio_sekat]
+    for ys in ys_sekat:
+        msp.add_line((kx0, ys), (bx1, ys), dxfattribs={"layer": "A-ANNO-TITL"})
+
+    teks_kop("GAMBAR KERJA", cx_k, (by1 + ys_sekat[0]) / 2.0 + 3.2 * skala, 2.9, warna=3)
+    teks_kop("ARSITEKTUR & STRUKTUR", cx_k, (by1 + ys_sekat[0]) / 2.0 - 3.2 * skala, 2.1, warna=7)
+
+    teks_kop("NAMA PROYEK :", kx0 + 3.0 * skala, ys_sekat[0] - 4.5 * skala, 1.9, rata=TA.MIDDLE_LEFT, warna=8)
+    teks_kop(meta.get("nama_proyek", "RUMAH TINGGAL").upper(), cx_k, (ys_sekat[0] + ys_sekat[1]) / 2.0 - 2.0 * skala, 2.5, warna=2)
+
+    teks_kop("JUDUL GAMBAR :", kx0 + 3.0 * skala, ys_sekat[1] - 4.5 * skala, 1.9, rata=TA.MIDDLE_LEFT, warna=8)
+    teks_kop(meta.get("judul_gambar", "DENAH").upper(), cx_k, (ys_sekat[1] + ys_sekat[2]) / 2.0 - 2.0 * skala, 2.5, warna=3)
+
+    teks_kop("PEMILIK / KLIEN :", kx0 + 3.0 * skala, ys_sekat[2] - 4.2 * skala, 1.8, rata=TA.MIDDLE_LEFT, warna=8)
+    teks_kop(meta.get("pemilik", "Pemilik Bangunan"), cx_k, ys_sekat[2] - 11.5 * skala, 2.2, warna=7)
+    teks_kop("DIGAMBAR / PERENCANA :", kx0 + 3.0 * skala, ys_sekat[2] - 20.5 * skala, 1.8, rata=TA.MIDDLE_LEFT, warna=8)
+    teks_kop(meta.get("perencana", "Rancang.io Studio"), cx_k, ys_sekat[2] - 27.5 * skala, 2.0, warna=7)
+
+    teks_kop(f"SKALA : {meta.get('skala_label', '1 : 50')}", kx0 + 3.0 * skala, (ys_sekat[3] + ys_sekat[4]) / 2.0 + 3.0 * skala, 2.2, rata=TA.MIDDLE_LEFT, warna=7)
+    teks_kop(f"TANGGAL : {meta.get('tanggal', datetime.date.today().strftime('%d-%m-%Y'))}", kx0 + 3.0 * skala, (ys_sekat[3] + ys_sekat[4]) / 2.0 - 3.5 * skala, 2.0, rata=TA.MIDDLE_LEFT, warna=7)
+
+    teks_kop(meta.get("kode_lembar", "ARS-01"), cx_k, (ys_sekat[4] + by0) / 2.0 + 3.8 * skala, 4.0, warna=2)
+    teks_kop(f"LEMBAR {meta.get('no_halaman', '01 / 08')}", cx_k, (ys_sekat[4] + by0) / 2.0 - 4.2 * skala, 2.2, warna=7)
+
+    return (bx0 + 4.0 * skala, by0 + 4.0 * skala, kx0 - 4.0 * skala, by1 - 4.0 * skala)
 
 
-def _gambar_simbol_utara(msp, cx: float, cy: float, radius: float = 460.0, f: float = 1.0) -> None:
-    """Menggambar simbol kompas arah utara yang proporsional pada kolom kop."""
-    msp.add_circle((cx, cy), radius=radius, dxfattribs={"layer": "A-ANNO-KOP"})
-    msp.add_circle((cx, cy), radius=radius * 0.85, dxfattribs={"layer": "A-ANNO-KOP-THIN"})
+def _tentukan_skala_adaptif(rumah, skala_pilihan: str = "Otomatis (Menyesuaikan)") -> float:
+    if "50" in skala_pilihan:
+        return 50.0
+    if "75" in skala_pilihan:
+        return 75.0
+    if "100" in skala_pilihan:
+        return 100.0
 
-    p_atas = (cx, cy + radius * 1.18)
-    p_bawah = (cx, cy - radius * 0.95)
-    p_kiri = (cx - radius * 0.28, cy)
-    p_kanan = (cx + radius * 0.28, cy)
-
-    jarum_utara = [p_atas, p_kiri, (cx, cy + radius * 0.12), p_kanan]
-    msp.add_lwpolyline(jarum_utara, close=True, dxfattribs={"layer": "A-ANNO-KOP-ACCENT", "color": 4})
-    h = msp.add_hatch(color=4, dxfattribs={"layer": "A-ANNO-KOP-ACCENT"})
-    h.set_solid_fill()
-    h.paths.add_polyline_path(jarum_utara, is_closed=True)
-
-    msp.add_lwpolyline(
-        [p_bawah, p_kiri, (cx, cy - radius * 0.12), p_kanan],
-        close=True,
-        dxfattribs={"layer": "A-ANNO-KOP"},
-    )
-    _tambah_teks(
-        msp,
-        "U",
-        (cx, cy + radius * 1.48),
-        tinggi=220 * f,
-        layer="A-ANNO-KOP-ACCENT",
-        lebar_maks=600 * f,
-        anchor=5,
-    )
+    x0, y0, x1, y1 = rumah.batas
+    bentang_max = max(abs(x1 - x0), abs(y1 - y0))
+    if getattr(rumah, "jumlah_lantai", 1) >= 2:
+        bentang_max = max(bentang_max, 8200.0)
+    if bentang_max <= 7500.0:
+        return 50.0
+    if bentang_max <= 11500.0:
+        return 75.0
+    return 100.0
 
 
-def gambar_kop_a3(
+def daftar_lembar_kerja(rumah) -> List[Dict[str, str]]:
+    is_2lt = getattr(rumah, "jumlah_lantai", 1) >= 2
+    if is_2lt:
+        return [
+            {"id": "denah_1", "label": "Denah Lantai 1", "kode": "ARS-01", "judul": "DENAH LANTAI 1"},
+            {"id": "denah_2", "label": "Denah Lantai 2", "kode": "ARS-02", "judul": "DENAH LANTAI 2"},
+            {"id": "potongan_a", "label": "Potongan A-A", "kode": "ARS-03", "judul": "POTONGAN A-A"},
+            {"id": "potongan_b", "label": "Potongan B-B", "kode": "ARS-04", "judul": "POTONGAN B-B"},
+            {"id": "tampak_depan", "label": "Tampak depan", "kode": "ARS-05", "judul": "TAMPAK DEPAN"},
+            {"id": "tampak_belakang", "label": "Tampak belakang", "kode": "ARS-06", "judul": "TAMPAK BELAKANG"},
+            {"id": "tampak_kanan", "label": "Tampak kanan", "kode": "ARS-07", "judul": "TAMPAK KANAN"},
+            {"id": "tampak_kiri", "label": "Tampak kiri", "kode": "ARS-08", "judul": "TAMPAK KIRI"},
+            {"id": "detail", "label": "Detail Pondasi & Kusen", "kode": "STR-01", "judul": "DETAIL STRUKTUR & KUSEN"},
+        ]
+    return [
+        {"id": "denah_1", "label": "Denah", "kode": "ARS-01", "judul": "DENAH RENCANA"},
+        {"id": "potongan_a", "label": "Potongan A-A", "kode": "ARS-02", "judul": "POTONGAN A-A"},
+        {"id": "potongan_b", "label": "Potongan B-B", "kode": "ARS-03", "judul": "POTONGAN B-B"},
+        {"id": "tampak_depan", "label": "Tampak depan", "kode": "ARS-04", "judul": "TAMPAK DEPAN"},
+        {"id": "tampak_belakang", "label": "Tampak belakang", "kode": "ARS-05", "judul": "TAMPAK BELAKANG"},
+        {"id": "tampak_kanan", "label": "Tampak kanan", "kode": "ARS-06", "judul": "TAMPAK KANAN"},
+        {"id": "tampak_kiri", "label": "Tampak kiri", "kode": "ARS-07", "judul": "TAMPAK KIRI"},
+        {"id": "detail", "label": "Detail Pondasi & Kusen", "kode": "STR-01", "judul": "DETAIL PONDASI & KUSEN"},
+    ]
+
+
+def _gambar_isi_lembar(
+    rumah,
     msp,
+    sheet_id: str,
     ox: float,
     oy: float,
-    judul_lembar: str = "DENAH RENCANA",
-    kode_gambar: str = "ARS-01",
-    nomor_lembar: str = "01 / 08",
-    skala: Optional[str] = None,
-    skala_num: int = 100,
-    info_proyek: Optional[Dict[str, str]] = None,
-    tampilkan_utara: bool = True,
+    skala_label: str,
+    viewport: Optional[Tuple[float, float, float, float]] = None,
 ) -> Tuple[float, float, float, float]:
-    """
-    Menggambar bingkai kertas A3 dan kop vertikal sisi kanan standar konsultan
-    yang diskalakan sesuai skala_num (misal 1:50 -> f=0.5, 1:20 -> f=0.2).
-    Mengembalikan bounding box penuh lembar (x0, y0, x1, y1).
-    """
-    siapkan_layer_kop(msp.doc)
-    info = info_proyek or {}
-    f = skala_num / 100.0
-    label_skala = skala or f"1 : {skala_num}"
+    if sheet_id == "denah_1":
+        return gambar_denah_lantai(rumah, msp, lantai=1, ox=ox, oy=oy, skala_label=skala_label)
+    if sheet_id == "denah_2":
+        return gambar_denah_lantai(rumah, msp, lantai=2, ox=ox, oy=oy, skala_label=skala_label)
+    if sheet_id == "potongan_a":
+        cfg_a = next((p for p in rumah.potongan if "A" in str(p.get("nama", "")).upper()), {"nama": "A-A", "arah": "x"})
+        return gambar_potongan(rumah, msp, potongan_cfg=cfg_a, ox=ox, oy=oy, skala_label=skala_label)
+    if sheet_id == "potongan_b":
+        cfg_b = next((p for p in rumah.potongan if "B" in str(p.get("nama", "")).upper()), {"nama": "B-B", "arah": "y"})
+        return gambar_potongan(rumah, msp, potongan_cfg=cfg_b, ox=ox, oy=oy, skala_label=skala_label)
+    if sheet_id.startswith("tampak_"):
+        sisi = sheet_id.replace("tampak_", "")
+        return gambar_tampak(rumah, msp, sisi=sisi, ox=ox, oy=oy, skala_label=skala_label)
+    return gambar_detail(rumah, msp, ox=ox, oy=oy, skala_label="1 : 20", viewport=viewport)
 
-    nama_proyek = info.get("nama_proyek") or "RUMAH TINGGAL SEDERHANA"
-    lokasi_proyek = info.get("lokasi") or "Kab. Magelang, Jawa Tengah"
-    klien = info.get("klien") or "Pemilik Bangunan"
-    perencana = info.get("perencana") or "Rancang.io Engineering Studio"
-    tanggal = info.get("tanggal") or datetime.now().strftime("%d %B %Y")
 
-    x_luar_0, y_luar_0 = ox, oy
-    x_luar_1, y_luar_1 = ox + LEBAR_A3 * f, oy + TINGGI_A3 * f
+def buat_paket_dxf(
+    rumah,
+    nama_proyek: str = "Rumah Tinggal",
+    pemilik: str = "Pemilik Bangunan",
+    perencana: str = "Rancang.io Studio",
+    skala_pilihan: str = "Otomatis (Menyesuaikan)",
+) -> Tuple[bytes, Dict[str, Any]]:
+    doc = ezdxf.new("R2010", setup=True)
+    doc.header["$INSUNITS"] = 4
+    _siapkan_layer_kop(doc)
+    msp = doc.modelspace()
 
-    ix0 = ox + MARGIN_KIRI * f
-    iy0 = oy + MARGIN_LUAR * f
-    ix1 = ox + (LEBAR_A3 - MARGIN_LUAR) * f
-    iy1 = oy + (TINGGI_A3 - MARGIN_LUAR) * f
+    skala = _tentukan_skala_adaptif(rumah, skala_pilihan)
+    skala_str = f"1 : {int(skala)}"
+    sheets = daftar_lembar_kerja(rumah)
+    total_hal = len(sheets)
 
-    kx0 = ix1 - LEBAR_KOP * f
-    kx1 = ix1
-    cx_kop = kx0 + (LEBAR_KOP * f) / 2.0
-    pad_x = 280.0 * f
-    w_teks = (LEBAR_KOP * f) - 2 * pad_x
+    W_a3 = 420.0 * skala
+    H_a3 = 297.0 * skala
+    jarak_x = W_a3 + 60.0 * skala
+    jarak_y = H_a3 + 60.0 * skala
+    kolom_grid = 3
 
-    # 1. Garis Tepi Luar Kertas A3 & Garis Tepi Dalam
-    msp.add_lwpolyline(
-        [(x_luar_0, y_luar_0), (x_luar_1, y_luar_0), (x_luar_1, y_luar_1), (x_luar_0, y_luar_1)],
-        close=True,
-        dxfattribs={"layer": "A-ANNO-KOP-THIN"},
-    )
-    msp.add_lwpolyline(
-        [(ix0, iy0), (ix1, iy0), (ix1, iy1), (ix0, iy1)],
-        close=True,
-        dxfattribs={"layer": "A-ANNO-KOP"},
-    )
+    peta_bbox: Dict[str, Tuple[float, float, float, float]] = {}
 
-    # 2. Garis Batas Vertikal Kolom Kop Kanan
-    msp.add_line((kx0, iy0), (kx0, iy1), dxfattribs={"layer": "A-ANNO-KOP"})
+    for idx, sh in enumerate(sheets):
+        col = idx % kolom_grid
+        row = idx // kolom_grid
+        sx0 = col * jarak_x
+        sy0 = -row * jarak_y
 
-    # 3. Sekat Horizontal Utama Kop
-    sekat_utama = [26300, 22100, 20100, 11900, 9000, 6400, 3400]
-    for y_rel in sekat_utama:
-        msp.add_line((kx0, oy + y_rel * f), (kx1, oy + y_rel * f), dxfattribs={"layer": "A-ANNO-KOP"})
+        meta = {
+            "nama_proyek": nama_proyek,
+            "judul_gambar": sh["judul"],
+            "pemilik": pemilik,
+            "perencana": perencana,
+            "skala_label": "1 : 20" if sh["id"] == "detail" else skala_str,
+            "kode_lembar": sh["kode"],
+            "no_halaman": f"{idx + 1:02d} / {total_hal:02d}",
+        }
+        vx0, vy0, vx1, vy1 = _gambar_bingkai_kop_a3(msp, sx0, sy0, skala, meta)
 
-    # 4. Sub-sekat Tipis untuk Pemisahan Field yang Rapi
-    sekat_tipis = [24100, 17200, 7450]
-    for y_rel in sekat_tipis:
-        msp.add_line((kx0, oy + y_rel * f), (kx1, oy + y_rel * f), dxfattribs={"layer": "A-ANNO-KOP-THIN"})
+        x0_b, y0_b, x1_b, y1_b = rumah.batas
+        cx_b = (x0_b + x1_b) / 2.0
+        cy_b = (y0_b + y1_b) / 2.0
+        vcx = (vx0 + vx1) / 2.0
+        vcy = (vy0 + vy1) / 2.0
 
-    # --- BLOK 1: IDENTITAS STUDIO / KONSULTAN ---
-    _tambah_teks(
-        msp, "RANCANG.IO", (cx_kop, oy + 27880 * f),
-        tinggi=380 * f, layer="A-ANNO-KOP-ACCENT", lebar_maks=w_teks, anchor=5,
-    )
-    _tambah_teks(
-        msp, "ARCHITECTURAL & CIVIL ENGINEERING STUDIO", (cx_kop, oy + 26980 * f),
-        tinggi=155 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=w_teks, anchor=5,
-    )
-
-    # --- BLOK 2A: NAMA PROYEK ---
-    _tambah_teks(
-        msp, "NAMA PROYEK", (kx0 + pad_x, oy + 26040 * f),
-        tinggi=155 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=w_teks, anchor=1,
-    )
-    _tambah_teks(
-        msp, nama_proyek.upper(), (cx_kop, oy + 24980 * f),
-        tinggi=265 * f, layer="A-ANNO-KOP-ACCENT", lebar_maks=w_teks, anchor=5,
-    )
-
-    # --- BLOK 2B: LOKASI PROYEK ---
-    _tambah_teks(
-        msp, "LOKASI PROYEK", (kx0 + pad_x, oy + 23840 * f),
-        tinggi=155 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=w_teks, anchor=1,
-    )
-    _tambah_teks(
-        msp, lokasi_proyek, (cx_kop, oy + 22920 * f),
-        tinggi=215 * f, layer="A-ANNO-KOP-TEXT", lebar_maks=w_teks, anchor=5,
-    )
-
-    # --- BLOK 3: PEMILIK / KLIEN ---
-    _tambah_teks(
-        msp, "PEMILIK / KLIEN", (kx0 + pad_x, oy + 21840 * f),
-        tinggi=155 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=w_teks, anchor=1,
-    )
-    _tambah_teks(
-        msp, klien, (cx_kop, oy + 20920 * f),
-        tinggi=225 * f, layer="A-ANNO-KOP-TEXT", lebar_maks=w_teks, anchor=5,
-    )
-
-    # --- BLOK 4A: CATATAN TEKNIS ---
-    _tambah_teks(
-        msp, "CATATAN TEKNIS", (kx0 + pad_x, oy + 19840 * f),
-        tinggi=155 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=w_teks, anchor=1,
-    )
-    catatan = (
-        "1. Seluruh ukuran dalam satuan milimeter (mm).\n"
-        "2. Mutu beton struktur K-300; kolom 150×150 mm.\n"
-        "3. Dinding pasangan bata merah 1:4 tebal 150 mm."
-    )
-    _tambah_teks(
-        msp, catatan, (kx0 + pad_x, oy + 19360 * f),
-        tinggi=160 * f, layer="A-ANNO-KOP-TEXT", lebar_maks=w_teks, anchor=1, spasi_baris=1.38,
-    )
-
-    # --- BLOK 4B: LEGENDA GAMBAR ---
-    _tambah_teks(
-        msp, "LEGENDA GAMBAR", (kx0 + pad_x, oy + 16940 * f),
-        tinggi=155 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=w_teks, anchor=1,
-    )
-
-    legenda = [
-        ("S-COLS", 1, "Kolom Praktis Beton 150×150"),
-        ("A-WALL", 6, "Dinding Pasangan Bata Merah"),
-        ("A-DOOR", 1, "Kusen & Daun Pintu"),
-        ("A-GLAZ", 4, "Kusen & Kaca Jendela"),
-        ("A-FURN", 30, "Furnitur & Sanitair"),
-        ("A-ANNO-DIMS", 3, "Garis Dimensi Ukur"),
-    ]
-    y_leg = oy + 16250 * f
-    for lyr, warna, ket in legenda:
-        p_bl = (kx0 + pad_x, y_leg - 300 * f)
-        p_br = (kx0 + pad_x + 560 * f, y_leg - 300 * f)
-        p_tr = (kx0 + pad_x + 560 * f, y_leg)
-        p_tl = (kx0 + pad_x, y_leg)
-        kotak = [p_bl, p_br, p_tr, p_tl]
-
-        if lyr == "S-COLS":
-            h_leg = msp.add_hatch(color=warna, dxfattribs={"layer": lyr})
-            h_leg.set_solid_fill()
-            h_leg.paths.add_polyline_path(kotak, is_closed=True)
-            msp.add_lwpolyline(kotak, close=True, dxfattribs={"layer": lyr, "color": warna})
-            msp.add_line(p_bl, p_tr, dxfattribs={"layer": lyr, "color": warna})
-            msp.add_line(p_tl, p_br, dxfattribs={"layer": lyr, "color": warna})
+        if sh["id"] in ("denah_1", "denah_2"):
+            ox = vcx - cx_b
+            oy = vcy - cy_b + 350.0
+        elif sh["id"] in ("potongan_a", "potongan_b", "tampak_depan", "tampak_belakang", "tampak_kanan", "tampak_kiri"):
+            tinggi_tot = float(rumah.lantai.get("tinggi_dinding", 3000.0)) + (
+                float(rumah.lantai_2.get("tinggi_dinding", 3200.0)) if getattr(rumah, "jumlah_lantai", 1) >= 2 else 0.0
+            )
+            ox = vcx - cx_b + 550.0
+            oy = vcy - (tinggi_tot * 0.44)
         else:
-            msp.add_lwpolyline(kotak, close=True, dxfattribs={"layer": lyr, "color": warna})
+            ox = vx0
+            oy = vy0
 
-        _tambah_teks(
-            msp, ket, (kx0 + pad_x + 760 * f, y_leg - 150 * f),
-            tinggi=165 * f, layer="A-ANNO-KOP-TEXT", lebar_maks=w_teks - 760 * f, anchor=4,
+        _gambar_isi_lembar(rumah, msp, sh["id"], ox, oy, meta["skala_label"], viewport=(vx0, vy0, vx1, vy1))
+        peta_bbox[sh["id"]] = (sx0, sy0, sx0 + W_a3, sy0 + H_a3)
+
+    stream = io.StringIO()
+    doc.write(stream)
+    dxf_bytes = stream.getvalue().encode("utf-8")
+
+    return dxf_bytes, {
+        "skala": int(skala),
+        "skala_label": skala_str,
+        "sheets": sheets,
+        "peta_bbox": peta_bbox,
+    }
+
+
+def render_pratinjau_lembar_png(
+    rumah,
+    sheet_id: str,
+    nama_proyek: str = "Rumah Tinggal",
+    pemilik: str = "Pemilik Bangunan",
+    perencana: str = "Rancang.io Studio",
+    skala_pilihan: str = "Otomatis (Menyesuaikan)",
+) -> bytes:
+    doc = ezdxf.new("R2010", setup=True)
+    _siapkan_layer_kop(doc)
+    msp = doc.modelspace()
+
+    skala = _tentukan_skala_adaptif(rumah, skala_pilihan)
+    skala_str = f"1 : {int(skala)}"
+    sheets = daftar_lembar_kerja(rumah)
+    idx = next((i for i, s in enumerate(sheets) if s["id"] == sheet_id), 0)
+    sh = sheets[idx]
+
+    W_a3 = 420.0 * skala
+    H_a3 = 297.0 * skala
+    meta = {
+        "nama_proyek": nama_proyek,
+        "judul_gambar": sh["judul"],
+        "pemilik": pemilik,
+        "perencana": perencana,
+        "skala_label": "1 : 20" if sh["id"] == "detail" else skala_str,
+        "kode_lembar": sh["kode"],
+        "no_halaman": f"{idx + 1:02d} / {len(sheets):02d}",
+    }
+    vx0, vy0, vx1, vy1 = _gambar_bingkai_kop_a3(msp, 0.0, 0.0, skala, meta)
+
+    x0_b, y0_b, x1_b, y1_b = rumah.batas
+    cx_b, cy_b = (x0_b + x1_b) / 2.0, (y0_b + y1_b) / 2.0
+    vcx, vcy = (vx0 + vx1) / 2.0, (vy0 + vy1) / 2.0
+
+    if sh["id"] in ("denah_1", "denah_2"):
+        ox, oy = vcx - cx_b, vcy - cy_b + 350.0
+    elif sh["id"] in ("potongan_a", "potongan_b", "tampak_depan", "tampak_belakang", "tampak_kanan", "tampak_kiri"):
+        tinggi_tot = float(rumah.lantai.get("tinggi_dinding", 3000.0)) + (
+            float(rumah.lantai_2.get("tinggi_dinding", 3200.0)) if getattr(rumah, "jumlah_lantai", 1) >= 2 else 0.0
         )
-        y_leg -= 720 * f
-
-    # --- BLOK 5: ARAH UTARA & SKALA / FORMAT ---
-    kx_mid = kx0 + 3400.0 * f
-    msp.add_line((kx_mid, oy + 9000 * f), (kx_mid, oy + 11900 * f), dxfattribs={"layer": "A-ANNO-KOP"})
-    msp.add_line((kx_mid, oy + 10200 * f), (kx1, oy + 10200 * f), dxfattribs={"layer": "A-ANNO-KOP-THIN"})
-
-    cx_kiri = (kx0 + kx_mid) / 2.0
-    if tampilkan_utara:
-        _gambar_simbol_utara(msp, cx_kiri, oy + 10240 * f, radius=450.0 * f, f=f)
+        ox, oy = vcx - cx_b + 550.0, vcy - (tinggi_tot * 0.44)
     else:
-        _tambah_teks(
-            msp, "PROYEKSI\nORTOGONAL", (cx_kiri, oy + 10450 * f),
-            tinggi=175 * f, layer="A-ANNO-KOP-TEXT", lebar_maks=(kx_mid - kx0) - 240 * f, anchor=5, spasi_baris=1.35,
-        )
+        ox, oy = vx0, vy0
 
-    cx_kanan = (kx_mid + kx1) / 2.0
-    _tambah_teks(
-        msp, "SKALA", (kx_mid + 240 * f, oy + 11680 * f),
-        tinggi=150 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=3600 * f, anchor=1,
-    )
-    _tambah_teks(
-        msp, label_skala, (cx_kanan, oy + 10840 * f),
-        tinggi=310 * f, layer="A-ANNO-KOP-ACCENT", lebar_maks=3600 * f, anchor=5,
-    )
+    _gambar_isi_lembar(rumah, msp, sh["id"], ox, oy, meta["skala_label"], viewport=(vx0, vy0, vx1, vy1))
 
-    _tambah_teks(
-        msp, "UKURAN KERTAS", (kx_mid + 240 * f, oy + 10020 * f),
-        tinggi=140 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=3600 * f, anchor=1,
-    )
-    _tambah_teks(
-        msp, "A3 (420 × 297 mm)", (cx_kanan, oy + 9440 * f),
-        tinggi=165 * f, layer="A-ANNO-KOP-TEXT", lebar_maks=3600 * f, anchor=5,
-    )
+    fig = plt.figure(figsize=(11.69, 8.27), dpi=150)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_facecolor("#0B1120")
+    fig.patch.set_facecolor("#0B1120")
 
-    # --- BLOK 6: PERENCANA & TANGGAL TERBIT ---
-    _tambah_teks(
-        msp, "PERENCANA / DIGAMBAR OLEH", (kx0 + pad_x, oy + 8780 * f),
-        tinggi=150 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=w_teks, anchor=1,
-    )
-    _tambah_teks(
-        msp, perencana, (cx_kop, oy + 8020 * f),
-        tinggi=210 * f, layer="A-ANNO-KOP-TEXT", lebar_maks=w_teks, anchor=5,
-    )
+    ctx = RenderContext(doc)
+    out = MatplotlibBackend(ax)
+    Frontend(ctx, out).draw_layout(msp, finalize=True)
 
-    _tambah_teks(
-        msp, "TANGGAL TERBIT", (kx0 + pad_x, oy + 7260 * f),
-        tinggi=145 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=w_teks, anchor=1,
-    )
-    _tambah_teks(
-        msp, tanggal, (cx_kop, oy + 6760 * f),
-        tinggi=185 * f, layer="A-ANNO-KOP-TEXT", lebar_maks=w_teks, anchor=5,
-    )
+    pad = 12.0 * skala
+    ax.set_xlim(-pad, W_a3 + pad)
+    ax.set_ylim(-pad, H_a3 + pad)
+    ax.set_aspect("equal")
+    ax.axis("off")
 
-    # --- BLOK 7: JUDUL LEMBAR GAMBAR ---
-    _tambah_teks(
-        msp, "JUDUL GAMBAR", (kx0 + pad_x, oy + 6150 * f),
-        tinggi=155 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=w_teks, anchor=1,
-    )
-    _tambah_teks(
-        msp, judul_lembar.upper(), (cx_kop, oy + 4720 * f),
-        tinggi=315 * f, layer="A-ANNO-KOP-ACCENT", lebar_maks=w_teks, anchor=5,
-    )
-
-    # --- BLOK 8: NO. GAMBAR & NOMOR LEMBAR ---
-    kx_kode = kx0 + 4100.0 * f
-    msp.add_line((kx_kode, iy0), (kx_kode, oy + 3400 * f), dxfattribs={"layer": "A-ANNO-KOP"})
-
-    _tambah_teks(
-        msp, "NO. GAMBAR", (kx0 + pad_x, oy + 3160 * f),
-        tinggi=150 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=3600 * f, anchor=1,
-    )
-    _tambah_teks(
-        msp, kode_gambar.upper(), ((kx0 + kx_kode) / 2.0, oy + 2020 * f),
-        tinggi=315 * f, layer="A-ANNO-KOP-ACCENT", lebar_maks=3600 * f, anchor=5,
-    )
-
-    _tambah_teks(
-        msp, "LEMBAR", (kx_kode + 240 * f, oy + 3160 * f),
-        tinggi=150 * f, layer="A-ANNO-KOP-LABEL", lebar_maks=3000 * f, anchor=1,
-    )
-    _tambah_teks(
-        msp, nomor_lembar, ((kx_kode + kx1) / 2.0, oy + 2020 * f),
-        tinggi=285 * f, layer="A-ANNO-KOP-TEXT", lebar_maks=3000 * f, anchor=5,
-    )
-
-    return (x_luar_0, y_luar_0, x_luar_1, y_luar_1)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, facecolor="#0B1120")
+    plt.close(fig)
+    return buf.getvalue()

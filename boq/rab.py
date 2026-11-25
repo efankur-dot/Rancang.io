@@ -1,441 +1,345 @@
-"""Volume dan RAB rumah dari model Rumah -> file Excel dengan rumus hidup (openpyxl).
-
-Harga satuan basis: HSPK dan HSD Edisi ke-2 Tahun 2024, kolom Kab. Magelang.
-Mendukung penyesuaian Indeks Kemahalan Konstruksi (IKK) lintas kota dan override harga daerah.
 """
+Modul Perhitungan Volume Pekerjaan & Rencana Anggaran Biaya (RAB) Konstruksi.
+Mendukung 1 Lantai maupun 2 Lantai berdasarkan analisa AHSP SNI & Indeks Kemahalan Konstruksi (IKK).
+"""
+import io
 import math
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
-from shapely.geometry import LineString, MultiPoint, Point
+import openpyxl
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
-# kode: (uraian, satuan, harga Rp, sumber)
-HARGA = {
-    # --- upah (HSD Kab. Magelang) ---
-    "PEKERJA": ("Pekerja", "OH", 75000, "Upah no. 5"),
-    "TUKANG_BATU": ("Tukang batu", "OH", 105000, "Upah no. 11"),
-    "TUKANG_BESI": ("Tukang besi", "OH", 105000, "Upah no. 13"),
-    "TUKANG_KAYU": ("Tukang kayu", "OH", 105000, "Upah no. 15"),
-    "TUKANG_CAT": ("Tukang cat", "OH", 105000, "Upah no. 14"),
-    "TUKANG_ALU": ("Tukang aluminium", "OH", 105000, "Upah no. 10"),
-    "TUKANG_PIPA": ("Tukang pipa", "OH", 105000, "Upah no. 16"),
-    "KEPALA_TUKANG": ("Kepala tukang", "OH", 120000, "Upah no. 1"),
-    "MANDOR": ("Mandor", "OH", 110000, "Upah no. 2"),
-    # --- bahan (HSPK Kab. Magelang) ---
-    "BATU_BELAH": ("Batu belah", "m3", 279125, "Bahan no. 106"),
-    "PASIR_PASANG": ("Pasir pasang", "m3", 268214, "Bahan no. 119"),
-    "PASIR_URUG": ("Pasir urug", "m3", 193687, "Bahan no. 120"),
-    "SEMEN_KG": ("Semen portland", "kg", 1348, "Bahan no. 127"),
-    "BATA_MERAH": ("Bata merah", "buah", 893, "Bahan no. 97"),
-    "BETON_K300": ("Beton K-300", "m3", 1125000, "Bahan no. 516"),
-    "BETON_15": ("Beton 15 MPa", "m3", 1100000, "Bahan no. 515"),
-    "BESI_TUL": ("Baja tulangan sirip BjTS 280", "kg", 16250, "Bahan no. 38"),
-    "KAWAT_BETON": ("Kawat beton", "kg", 19166, "Bahan no. 57"),
-    "PLYWOOD_9": ("Plywood 9 mm", "lembar", 184000, "Bahan no. 258"),
-    "KASO_46": ("Kayu kaso 4/6 (kelas 3)", "m3", 2200000, "Bahan no. 236"),
-    "PAKU": ("Paku 5-10 cm", "kg", 19000, "Bahan no. 268"),
-    "MINYAK_BEKISTING": ("Minyak beton dan bekisting", "liter", 37050, "Bahan no. 539"),
-    "KERAMIK_40": ("Ubin keramik (dianggap 40x40)", "buah", 10958, "Bahan no. 348"),
-    "KERAMIK_20": ("Keramik 20x20 cm", "buah", 1830, "Bahan no. 315"),
-    "CAT_TEMBOK": ("Cat", "kg", 29625, "Bahan no. 139"),
-    "PLAMUUR": ("Plamuur", "kg", 36333, "Bahan no. 151"),
-    "GYPSUM_9": ("Gypsum tebal 9 mm", "lembar", 66100, "Bahan no. 259"),
-    "RANGKA_PLAFON": ("Rangka plafon metal furing", "m2", 29000, "Bahan no. 248"),
-    "LIST_GYPSUM": ("List gypsum", "m'", 22000, "Bahan no. 250"),
-    "RANGKA_ATAP": ("Rangka atap baja ringan", "m2", 125000, "Bahan no. 249"),
-    "GENTENG_METAL": ("Genteng metal", "buah", 33300, "Bahan no. 290"),
-    "NOK_METAL": ("Nok genteng metal", "buah", 18500, "Bahan no. 301"),
-    "PROFIL_ALU": ("Profil aluminium", "m'", 74400, "Bahan no. 555"),
-    "KACA_5": ("Kaca polos 5 mm", "m2", 124333, "Bahan no. 206"),
-    "KLOSET": ("Closet duduk", "unit", 1876000, "Bahan no. 490"),
-    "BAK_FIBER": ("Bak fiberglass", "unit", 283500, "Bahan no. 474"),
-    "KRAN": ("Kran air", "buah", 55000, "Bahan no. 478"),
-    "FLOOR_DRAIN": ("Floor drain", "unit", 26666, "Bahan no. 492"),
-    # --- tidak ada di HSPK: ASUMSI, isi dari survei harga ---
-    "PINTU_PANEL": ("Pintu panel kayu + kusen (jadi)", "unit", 1800000, "ASUMSI, tidak ada di HSPK"),
-    "PINTU_PVC": ("Pintu PVC kamar mandi + kusen", "unit", 450000, "ASUMSI, tidak ada di HSPK"),
+IKK_WILAYAH: Dict[str, float] = {
+    "Kota Semarang": 1.06,
+    "Kota Magelang": 1.02,
+    "Kab. Magelang": 1.00,
+    "Kota Yogyakarta": 1.04,
+    "Kota Surakarta (Solo)": 1.03,
+    "Kota Salatiga": 1.02,
+    "Kab. Temanggung": 1.00,
+    "Kab. Boyolali": 1.01,
+    "Kab. Sleman": 1.03,
+    "Kab. Bantul": 1.02,
+    "DKI Jakarta": 1.18,
+    "Kota Bandung": 1.08,
+    "Kota Surabaya": 1.10,
+    "Kota Malang": 1.06,
+    "Kota Denpasar": 1.12,
+    "Kota Medan": 1.05,
+    "Kota Makassar": 1.07,
+    "Kota Balikpapan": 1.15,
 }
 
-# Paket komponen yang dipakai berulang
-_BETON = [("BETON_K300", 1.0), ("PEKERJA", 1.65), ("TUKANG_BATU", 0.275), ("KEPALA_TUKANG", 0.028), ("MANDOR", 0.083)]
-_KERAMIK_KERJA = [("SEMEN_KG", 10), ("PASIR_PASANG", 0.045), ("PEKERJA", 0.7), ("TUKANG_BATU", 0.35),
-                  ("KEPALA_TUKANG", 0.035), ("MANDOR", 0.035)]
 
-# (kode, divisi, uraian, satuan, kunci_volume, [(kode_harga, koefisien), ...])
-PEKERJAAN = [
-    ("A.1", "A. Persiapan", "Pembersihan lahan dan perataan", "m2", "lahan", [("PEKERJA", 0.05), ("MANDOR", 0.0025)]),
-    ("B.1", "B. Tanah dan pondasi", "Galian tanah pondasi", "m3", "galian", [("PEKERJA", 0.75), ("MANDOR", 0.025)]),
-    ("B.2", "B. Tanah dan pondasi", "Urugan pasir bawah pondasi (t=5 cm)", "m3", "pasir_pondasi",
-     [("PASIR_URUG", 1.2), ("PEKERJA", 0.3), ("MANDOR", 0.01)]),
-    ("B.3", "B. Tanah dan pondasi", "Aanstamping batu belah (t=15 cm)", "m3", "aanstamping",
-     [("BATU_BELAH", 1.2), ("PASIR_URUG", 0.432), ("PEKERJA", 0.78), ("TUKANG_BATU", 0.26), ("KEPALA_TUKANG", 0.026), ("MANDOR", 0.039)]),
-    ("B.4", "B. Tanah dan pondasi", "Pondasi batu kali 1:4", "m3", "pondasi",
-     [("BATU_BELAH", 1.2), ("SEMEN_KG", 163), ("PASIR_PASANG", 0.52), ("PEKERJA", 1.5), ("TUKANG_BATU", 0.75),
-      ("KEPALA_TUKANG", 0.075), ("MANDOR", 0.075)]),
-    ("B.5", "B. Tanah dan pondasi", "Urugan tanah kembali", "m3", "urug_kembali", [("PEKERJA", 0.25), ("MANDOR", 0.0125)]),
-    ("B.6", "B. Tanah dan pondasi", "Urugan pasir bawah lantai (t=10 cm)", "m3", "pasir_lantai",
-     [("PASIR_URUG", 1.2), ("PEKERJA", 0.3), ("MANDOR", 0.01)]),
-    ("B.7", "B. Tanah dan pondasi", "Lantai kerja beton 15 MPa (t=5 cm)", "m3", "lantai_kerja",
-     [("BETON_15", 1.0), ("PEKERJA", 1.65), ("TUKANG_BATU", 0.275), ("KEPALA_TUKANG", 0.028), ("MANDOR", 0.083)]),
-    ("C.1", "C. Struktur beton", "Beton sloof 15/20 (K-300)", "m3", "beton_sloof", _BETON),
-    ("C.2", "C. Struktur beton", "Beton kolom praktis 15/15 (K-300)", "m3", "beton_kolom", _BETON),
-    ("C.3", "C. Struktur beton", "Beton ring balok 15/15 (K-300)", "m3", "beton_ring", _BETON),
-    ("C.4", "C. Struktur beton", "Pembesian sloof, kolom, ring balok", "kg", "besi",
-     [("BESI_TUL", 1.05), ("KAWAT_BETON", 0.015), ("TUKANG_BESI", 0.007), ("PEKERJA", 0.007), ("KEPALA_TUKANG", 0.0007), ("MANDOR", 0.0004)]),
-    ("C.5", "C. Struktur beton", "Bekisting sloof, kolom, ring balok", "m2", "bekisting",
-     [("PLYWOOD_9", 0.35), ("KASO_46", 0.055), ("PAKU", 0.4), ("MINYAK_BEKISTING", 0.2), ("TUKANG_KAYU", 0.33),
-      ("PEKERJA", 0.66), ("KEPALA_TUKANG", 0.033), ("MANDOR", 0.033)]),
-    ("D.1", "D. Dinding", "Pasangan bata merah 1/2 bata (1:4)", "m2", "dinding_bersih",
-     [("BATA_MERAH", 70), ("SEMEN_KG", 11.5), ("PASIR_PASANG", 0.043), ("PEKERJA", 0.3), ("TUKANG_BATU", 0.1),
-      ("KEPALA_TUKANG", 0.01), ("MANDOR", 0.015)]),
-    ("D.2", "D. Dinding", "Plesteran 1:4 tebal 15 mm (dua sisi)", "m2", "plester",
-     [("SEMEN_KG", 6.24), ("PASIR_PASANG", 0.024), ("PEKERJA", 0.3), ("TUKANG_BATU", 0.15), ("KEPALA_TUKANG", 0.015), ("MANDOR", 0.015)]),
-    ("D.3", "D. Dinding", "Acian", "m2", "plester",
-     [("SEMEN_KG", 3.25), ("PEKERJA", 0.2), ("TUKANG_BATU", 0.1), ("KEPALA_TUKANG", 0.01), ("MANDOR", 0.01)]),
-    ("D.4", "D. Dinding", "Pengecatan dinding (plamuur + 2 lapis)", "m2", "cat",
-     [("CAT_TEMBOK", 0.26), ("PLAMUUR", 0.1), ("PEKERJA", 0.02), ("TUKANG_CAT", 0.063), ("KEPALA_TUKANG", 0.0063), ("MANDOR", 0.0033)]),
-    ("D.5", "D. Dinding", "Keramik dinding 20x20 (area basah)", "m2", "keramik_dinding", [("KERAMIK_20", 26.25)] + _KERAMIK_KERJA),
-    ("E.1", "E. Lantai", "Keramik lantai 40x40", "m2", "lantai_40", [("KERAMIK_40", 6.56)] + _KERAMIK_KERJA),
-    ("E.2", "E. Lantai", "Keramik lantai 20x20 (area basah)", "m2", "lantai_20", [("KERAMIK_20", 26.25)] + _KERAMIK_KERJA),
-    ("F.1", "F. Plafon", "Plafon gypsum 9 mm dengan rangka metal furing", "m2", "plafon",
-     [("GYPSUM_9", 0.382), ("RANGKA_PLAFON", 1.0), ("TUKANG_KAYU", 0.15), ("PEKERJA", 0.1), ("KEPALA_TUKANG", 0.015), ("MANDOR", 0.005)]),
-    ("F.2", "F. Plafon", "List plafon gypsum", "m'", "list_plafon", [("LIST_GYPSUM", 1.05), ("TUKANG_KAYU", 0.05), ("PEKERJA", 0.025)]),
-    ("G.1", "G. Atap", "Rangka atap baja ringan", "m2", "atap", [("RANGKA_ATAP", 1.0), ("TUKANG_BESI", 0.1), ("PEKERJA", 0.1)]),
-    ("G.2", "G. Atap", "Penutup atap genteng metal", "m2", "atap",
-     [("GENTENG_METAL", 3.1), ("TUKANG_KAYU", 0.07), ("PEKERJA", 0.07), ("KEPALA_TUKANG", 0.007), ("MANDOR", 0.0035)]),
-    ("G.3", "G. Atap", "Nok genteng metal", "m'", "nok", [("NOK_METAL", 2.5), ("TUKANG_KAYU", 0.05), ("PEKERJA", 0.05)]),
-    ("H.1", "H. Pintu dan jendela", "Jendela aluminium + kaca 5 mm", "m2", "jendela",
-     [("PROFIL_ALU", 4.5), ("KACA_5", 1.05), ("TUKANG_ALU", 0.4), ("PEKERJA", 0.2), ("KEPALA_TUKANG", 0.04), ("MANDOR", 0.02)]),
-    ("H.2", "H. Pintu dan jendela", "Pintu panel kayu + kusen", "unit", "pintu_panel", [("PINTU_PANEL", 1), ("TUKANG_KAYU", 0.5), ("PEKERJA", 0.25)]),
-    ("H.3", "H. Pintu dan jendela", "Pintu PVC kamar mandi + kusen", "unit", "pintu_pvc", [("PINTU_PVC", 1), ("TUKANG_KAYU", 0.3), ("PEKERJA", 0.15)]),
-    ("I.1", "I. Sanitair", "Pasang kloset duduk", "unit", "kloset", [("KLOSET", 1), ("TUKANG_PIPA", 0.5), ("PEKERJA", 0.25)]),
-    ("I.2", "I. Sanitair", "Pasang bak air fiberglass", "unit", "bak", [("BAK_FIBER", 1), ("PEKERJA", 0.25)]),
-    ("I.3", "I. Sanitair", "Pasang kran air", "buah", "kran", [("KRAN", 1), ("TUKANG_PIPA", 0.1)]),
-    ("I.4", "I. Sanitair", "Pasang floor drain", "unit", "drain", [("FLOOR_DRAIN", 1), ("TUKANG_PIPA", 0.1)]),
-]
+def hitung_rab(rumah, wilayah: str = "Kota Semarang", ikk_custom: float = 0.0) -> Dict[str, Any]:
+    """Menghitung rincian volume, harga satuan terkoreksi IKK, dan total biaya RAB (1 & 2 Lantai)."""
+    ikk = float(ikk_custom) if ikk_custom > 0 else float(IKK_WILAYAH.get(wilayah, 1.00))
+    is_2lt = getattr(rumah, "jumlah_lantai", 1) >= 2
 
-RASIO_BESI = 150.0   # kg besi per m3 beton (ASUMSI)
+    x0, y0, x1, y1 = rumah.batas
+    panjang_bgn_m = abs(x1 - x0) / 1000.0
+    lebar_bgn_m = abs(y1 - y0) / 1000.0
+    luas_tapak_m2 = panjang_bgn_m * lebar_bgn_m
 
+    luas_lt1_m2 = sum(r.luas_m2 for r in rumah.ruang) or luas_tapak_m2
+    luas_lt2_m2 = sum(r.luas_m2 for r in rumah.ruang_lt2) if is_2lt else 0.0
+    luas_balkon_m2 = sum(
+        (abs(float(b["kotak"][2]) - float(b["kotak"][0])) * abs(float(b["kotak"][3]) - float(b["kotak"][1]))) / 1_000_000.0
+        for b in (rumah.balkon or [])
+        if isinstance(b.get("kotak"), list) and len(b["kotak"]) == 4
+    ) if is_2lt else 0.0
+    luas_total_m2 = luas_lt1_m2 + luas_lt2_m2 + luas_balkon_m2
 
-def _hitung_jumlah_kolom(r) -> int:
-    """Menghitung jumlah titik kolom yang sinkron 100% dengan modul drawing/denah.py."""
-    titik_kolom: List[Tuple[float, float]] = []
+    # Panjang dinding total Lantai 1 & Lantai 2
+    pjg_d1_m = sum(d.panjang / 1000.0 for d in rumah.dinding)
+    pjg_d2_m = sum(d.panjang / 1000.0 for d in rumah.dinding_lt2) if is_2lt else 0.0
+    tinggi_lt1_m = float(rumah.lantai.get("tinggi_dinding", 3000.0)) / 1000.0
+    tinggi_lt2_m = float(rumah.lantai_2.get("tinggi_dinding", 3200.0)) / 1000.0 if is_2lt else 0.0
 
-    def tambah_unik(x: float, y: float, tol: float = 15.0) -> None:
-        rx, ry = float(round(x)), float(round(y))
-        for ex, ey in titik_kolom:
-            if math.hypot(rx - ex, ry - ey) <= tol:
-                return
-        titik_kolom.append((rx, ry))
+    luas_bukaan_1_m2 = sum((b.lebar * b.tinggi) / 1_000_000.0 for b in rumah.bukaan)
+    luas_bukaan_2_m2 = sum((b.lebar * b.tinggi) / 1_000_000.0 for b in rumah.bukaan_lt2) if is_2lt else 0.0
 
-    garis_dinding = []
-    for d in r.dinding:
-        tambah_unik(d.a[0], d.a[1])
-        tambah_unik(d.b[0], d.b[1])
-        garis_dinding.append((d, LineString([d.a, d.b])))
+    luas_dinding_net_m2 = max(
+        10.0,
+        (pjg_d1_m * tinggi_lt1_m - luas_bukaan_1_m2) + (pjg_d2_m * tinggi_lt2_m - luas_bukaan_2_m2),
+    )
 
-    n_garis = len(garis_dinding)
-    for i in range(n_garis):
-        for j in range(i + 1, n_garis):
-            inter = garis_dinding[i][1].intersection(garis_dinding[j][1])
-            if inter.is_empty:
-                continue
-            if isinstance(inter, Point):
-                tambah_unik(inter.x, inter.y)
-            elif isinstance(inter, MultiPoint):
-                for pt in inter.geoms:
-                    tambah_unik(pt.x, pt.y)
+    # Estimasi jumlah titik kolom struktur utama (sudut & simpang)
+    titik_kolom = max(4, len({(round(p[0], -1), round(p[1], -1)) for d in rumah.dinding for p in (d.a, d.b)}))
 
-    bentang_maks = 3500.0
-    for d, garis in garis_dinding:
-        pjg = garis.length
-        if pjg > bentang_maks:
-            jumlah_bagi = math.ceil(pjg / bentang_maks)
-            dx = d.b[0] - d.a[0]
-            dy = d.b[1] - d.a[1]
-            for k in range(1, jumlah_bagi):
-                rasio = k / jumlah_bagi
-                jarak = pjg * rasio
-                menabrak = any(
-                    b.dinding == d.id and (b.offset - 180.0) <= jarak <= (b.akhir + 180.0)
-                    for b in r.bukaan
-                )
-                if not menabrak:
-                    tambah_unik(d.a[0] + dx * rasio, d.a[1] + dy * rasio, tol=250.0)
+    # Parameter pondasi & struktur
+    st = rumah.struktur or {}
+    pnd = st.get("pondasi", {"lebar_bawah": 600, "lebar_atas": 300, "tinggi": 700})
+    luas_penampang_pnd = ((float(pnd["lebar_bawah"]) + float(pnd["lebar_atas"])) / 2000.0) * (float(pnd["tinggi"]) / 1000.0)
 
-    return max(4, len(titik_kolom))
+    sloof = st.get("sloof", [150, 200] if not is_2lt else [200, 300])
+    vol_sloof_m3 = pjg_d1_m * (float(sloof[0]) / 1000.0) * (float(sloof[1]) / 1000.0)
 
+    rb = st.get("ring_balok", [150, 150] if not is_2lt else [150, 200])
+    pjg_ring_m = pjg_d2_m if is_2lt and pjg_d2_m > 0 else pjg_d1_m
+    vol_ring_m3 = pjg_ring_m * (float(rb[0]) / 1000.0) * (float(rb[1]) / 1000.0)
 
-def _gabung_harga(harga_override: Optional[Dict[str, float]] = None) -> Dict[str, Tuple[str, str, float, str]]:
-    """Menggabungkan database HARGA bawaan dengan perubahan harga kustom dari pengguna."""
-    hasil = dict(HARGA)
-    if harga_override:
-        for kode, nilai_baru in harga_override.items():
-            if kode in hasil and nilai_baru is not None:
-                u, s, _, src = hasil[kode]
-                hasil[kode] = (u, s, float(nilai_baru), f"{src} (Kustom)")
-    return hasil
+    # Atap
+    atap = rumah.atap or {}
+    ov_m = float(atap.get("overstek", 600.0)) / 1000.0
+    sudut_rad = math.radians(float(atap.get("kemiringan_derajat", 30.0)))
+    luas_atap_m2 = ((panjang_bgn_m + 2 * ov_m) * (lebar_bgn_m + 2 * ov_m)) / max(0.65, math.cos(sudut_rad))
 
+    # Bukaan pintu & jendela gabungan
+    semua_bk = rumah.semua_bukaan
+    jml_pintu = sum(1 for b in semua_bk if b.jenis == "pintu")
+    luas_jendela_m2 = sum((b.lebar * b.tinggi) / 1_000_000.0 for b in semua_bk if b.jenis == "jendela")
 
-def hitung_volume(r):
-    """Hitung semua volume dari model Rumah. Kembalian: {kunci: (nilai, keterangan)}."""
-    t = r.dinding_default.get("tebal", 150) / 1000
-    H = r.lantai.get("tinggi_dinding", 3000) / 1000
-    xs = [p[0] for d in r.dinding for p in (d.a, d.b)]
-    ys = [p[1] for d in r.dinding for p in (d.a, d.b)]
-    W, D = (max(xs) - min(xs)) / 1000, (max(ys) - min(ys)) / 1000
-    Lw = sum(d.panjang for d in r.dinding) / 1000
+    # Keramik KM/WC
+    ruang_km = [r for r in rumah.semua_ruang if any(k in r.nama.lower() for k in ("km", "wc", "mandi"))]
+    luas_lantai_km = sum(r.luas_m2 for r in ruang_km)
+    luas_dinding_km = sum((r.keliling / 1000.0) * (float(r.keramik_dinding_tinggi or 1500.0) / 1000.0) for r in ruang_km)
+    luas_lantai_kering = max(5.0, luas_total_m2 - luas_lantai_km)
 
-    pf = r.struktur.get("pondasi", {})
-    lb, la, tp = pf.get("lebar_bawah", 600) / 1000, pf.get("lebar_atas", 300) / 1000, pf.get("tinggi", 700) / 1000
-    bs, hs = [v / 1000 for v in r.struktur.get("sloof", [150, 200])]
-    kw, kh = [v / 1000 for v in r.struktur.get("kolom", [150, 150])]
-    rw, rh = [v / 1000 for v in r.struktur.get("ring_balok", [150, 150])]
-    n_kolom = _hitung_jumlah_kolom(r)
+    items: List[Dict[str, Any]] = []
 
-    luas_bukaan = sum(b.lebar * b.tinggi for b in r.bukaan) / 1e6
-    dinding_kotor = Lw * H
-    dinding_bersih = dinding_kotor - luas_bukaan
-    plester = 2 * dinding_bersih
+    def tambah(divisi: str, kode: str, uraian: str, sat: str, vol: float, hsp_dasar: float):
+        if vol <= 1e-4:
+            return
+        hsp_wil = round(hsp_dasar * ikk, -2)
+        jumlah = round(vol * hsp_wil, 0)
+        items.append({
+            "divisi": divisi,
+            "kode": kode,
+            "uraian": uraian,
+            "satuan": sat,
+            "volume": round(vol, 2),
+            "harga_satuan": hsp_wil,
+            "jumlah_harga": jumlah,
+        })
 
-    k_dinding = 0.0
-    for rg in r.ruang:
-        if rg.keramik_dinding_tinggi:
-            hk = rg.keramik_dinding_tinggi / 1000
-            kel = 2 * ((rg.panjang / 1000 - t) + (rg.lebar / 1000 - t))
-            pintu = sum(b.lebar / 1000 for b in r.bukaan if b.jenis == "pintu"
-                        and b.ayun_ke and b.ayun_ke.strip().lower() == rg.nama.strip().lower())
-            k_dinding += (kel - pintu) * hk
+    # ---------------- DIVISI I: PEKERJAAN PERSIAPAN & TANAH ----------------
+    div1 = "I. PEKERJAAN PERSIAPAN & TANAH"
+    tambah(div1, "A.2.2.1.4", "Pembersihan Lapangan dan Perataan Lahan", "m²", luas_tapak_m2 * 1.25, 16500)
+    tambah(div1, "A.2.2.1.9", "Pengukuran dan Pemasangan Bowplank", "m'", 2 * (panjang_bgn_m + lebar_bgn_m + 2.0), 68000)
+    vol_galian_menerus = pjg_d1_m * 0.80 * 0.85
+    vol_galian_fp = (titik_kolom * 1.20 * 1.20 * 1.35) if is_2lt else 0.0
+    tambah(div1, "A.2.3.1.1", "Galian Tanah Biasa Sedalam 1 m - 1,5 m", "m³", vol_galian_menerus + vol_galian_fp, 86000)
+    tambah(div1, "A.2.3.1.9", "Urugan Tanah Kembali Dipadatkan", "m³", (vol_galian_menerus + vol_galian_fp) * 0.35, 54000)
+    tambah(div1, "A.2.3.1.11", "Urugan Pasir Bawah Pondasi & Lantai t = 5 cm", "m³", (pjg_d1_m * 0.80 * 0.05) + (luas_tapak_m2 * 0.05), 245000)
 
-    def bersih(rg):
-        return (rg.panjang / 1000 - t) * (rg.lebar / 1000 - t)
+    # ---------------- DIVISI II: PONDASI & STRUKTUR BETON BERTULANG ----------------
+    div2 = "II. PEKERJAAN PONDASI & STRUKTUR BETON"
+    tambah(div2, "A.3.2.1.9", "Pasangan Batu Kosong (Aanstamping) t = 15 cm", "m³", pjg_d1_m * 0.80 * 0.15, 495000)
+    tambah(div2, "A.3.2.1.2", "Pasangan Pondasi Batu Kali Campuran 1SP : 4PP", "m³", pjg_d1_m * luas_penampang_pnd, 895000)
 
-    lantai_40 = sum(bersih(g) for g in r.ruang if g.lantai and "40x40" in g.lantai)
-    lantai_20 = sum(bersih(g) for g in r.ruang if g.lantai and "20x20" in g.lantai)
-    plafon = sum(bersih(g) for g in r.ruang if g.plafon and "gypsum" in g.plafon.lower())
-    list_plafon = sum(2 * ((g.panjang / 1000 - t) + (g.lebar / 1000 - t)) for g in r.ruang
-                      if g.plafon and "gypsum" in g.plafon.lower())
-    luas_lantai = sum(bersih(g) for g in r.ruang)
+    if is_2lt:
+        fp = st.get("footplat", {"lebar": 1000, "panjang": 1000, "tebal": 250, "kedalaman": 1200})
+        vol_fp = titik_kolom * (float(fp["lebar"]) / 1000.0) * (float(fp["panjang"]) / 1000.0) * (float(fp["tebal"]) / 1000.0)
+        vol_ped = titik_kolom * 0.25 * 0.25 * 0.95
+        tambah(div2, "A.4.1.1.7", "Pondasi Footplat Beton Bertulang K-250 (100×100×25 cm)", "m³", vol_fp + vol_ped, 3850000)
+        tambah(div2, "A.4.1.1.8", "Sloof Beton Bertulang K-250 (20 × 30 cm)", "m³", vol_sloof_m3, 3920000)
 
-    galian = Lw * (lb + 0.2) * (tp + 0.05 + 0.15)
-    pasir_p, aanst, pond = Lw * lb * 0.05, Lw * lb * 0.15, Lw * (lb + la) / 2 * tp
-    b_sloof, b_kolom, b_ring = Lw * bs * hs, n_kolom * kw * kh * H, Lw * rw * rh
-    beton = b_sloof + b_kolom + b_ring
-    bekisting = Lw * 2 * hs + n_kolom * 4 * kw * H + Lw * (2 * rh + rw)
+        vol_kolom_utama = titik_kolom * 0.25 * 0.25 * (tinggi_lt1_m + tinggi_lt2_m)
+        tambah(div2, "A.4.1.1.9", "Kolom Struktur Utama Beton Bertulang K-250 (25 × 25 cm)", "m³", vol_kolom_utama, 4350000)
 
-    th = math.radians(r.atap.get("kemiringan_derajat", 30))
-    ov = r.atap.get("overstek", 600) / 1000
-    Wt, Dt = W + t, D + t
-    if r.atap.get("arah_nok", "x") == "x":
-        p_nok, bentang = Wt + 2 * ov, Dt + 2 * ov
+        bi = st.get("balok_induk", [200, 350])
+        vol_bi = (pjg_d2_m * 0.75) * (float(bi[0]) / 1000.0) * (float(bi[1]) / 1000.0)
+        tambah(div2, "A.4.1.1.10", "Balok Induk Lantai 2 Beton Bertulang K-250 (20 × 35 cm)", "m³", vol_bi, 4280000)
+
+        t_pelat_m = float((st.get("pelat_lantai") or {}).get("tebal", 120.0)) / 1000.0
+        vol_pelat = max(1.0, luas_lt2_m2 + luas_balkon_m2) * t_pelat_m
+        tambah(div2, "A.4.1.1.11", "Pelat Lantai 2 & Balkon Beton Bertulang K-300 (t = 12 cm)", "m³", vol_pelat, 4150000)
+
+        # Tangga Beton Bertulang + Railing
+        vol_tangga = 1.65
+        tambah(div2, "A.4.1.1.12", "Struktur Tangga Beton Bertulang K-250 & Anak Tangga", "m³", vol_tangga, 4450000)
+        tambah(div2, "A.4.2.1.15", "Railing Tangga & Balkon Besi Hollow Galvanis Finishing Cat", "m'", 4.8 + (luas_balkon_m2 * 1.4), 685000)
     else:
-        p_nok, bentang = Dt + 2 * ov, Wt + 2 * ov
-    atap = 2 * (bentang / 2) / math.cos(th) * p_nok
+        tambah(div2, "A.4.1.1.8", "Sloof Beton Bertulang Praktis (15 × 20 cm)", "m³", vol_sloof_m3, 3450000)
+        vol_kp = titik_kolom * 0.15 * 0.15 * tinggi_lt1_m
+        tambah(div2, "A.4.1.1.9", "Kolom Praktis Beton Bertulang (15 × 15 cm)", "m³", vol_kp, 3680000)
 
-    jendela = sum(b.lebar * b.tinggi for b in r.bukaan if b.jenis == "jendela") / 1e6
-    pintu = [b for b in r.bukaan if b.jenis == "pintu"]
-    pvc = sum(1 for b in pintu if b.bahan and "pvc" in b.bahan.lower())
-    nama = [g.nama.lower() for g in r.ruang]
-    n_km = sum(("km" in n or "wc" in n) for n in nama)
-    n_cuci = sum("cuci" in n for n in nama)
-    n_dapur = sum("dapur" in n for n in nama)
+    tambah(div2, "A.4.1.1.13", "Ring Balok Beton Bertulang (15 × 20 cm)", "m³", vol_ring_m3, 3580000)
+    tambah(div2, "A.4.1.1.4", "Lantai Kerja / Rabat Beton Tumbuk K-125 t = 5 cm", "m³", luas_tapak_m2 * 0.05, 985000)
+
+    # ---------------- DIVISI III: DINDING BATA & PLESTERAN ----------------
+    div3 = "III. PEKERJAAN PASANGAN DINDING & PLESTERAN"
+    tambah(div3, "A.4.4.1.9", "Pasangan Dinding Bata Merah Tebal 1/2 Bata Campuran 1SP : 4PP", "m²", luas_dinding_net_m2, 138000)
+    tambah(div3, "A.4.4.2.4", "Plesteran Dinding Campuran 1SP : 4PP Tebal 15 mm (2 Sisi)", "m²", luas_dinding_net_m2 * 2.0, 69000)
+    tambah(div3, "A.4.4.2.27", "Acian Dinding Semen Portland Halus (2 Sisi)", "m²", luas_dinding_net_m2 * 2.0, 42500)
+
+    # ---------------- DIVISI IV: KUSEN, PINTU & JENDELA ----------------
+    div4 = "IV. PEKERJAAN KUSEN, PINTU & JENDELA"
+    tambah(div4, "A.4.6.1.2", "Pengadaan & Pemasangan Unit Pintu Lengkap Kusen + Daun + Kunci", "unit", float(max(2, jml_pintu)), 2450000)
+    tambah(div4, "A.4.6.2.16", "Pengadaan & Pemasangan Jendela Kusen + Kaca Bening 5 mm", "m²", max(1.5, luas_jendela_m2), 1180000)
+
+    # ---------------- DIVISI V: ATAP & PLAFON ----------------
+    div5 = "V. PEKERJAAN RANGKA ATAP, PENUTUP ATAP & PLAFON"
+    tambah(div5, "A.4.2.1.21", "Pemasangan Rangka Atap Baja Ringan Profil C75.75 SNI", "m²", luas_atap_m2, 215000)
+    tambah(div5, "A.4.5.2.32", "Pemasangan Penutup Atap Genteng Metal / Beton Berwarna", "m²", luas_atap_m2, 128000)
+    tambah(div5, "A.4.5.2.36", "Pemasangan Nok / Bubungan Genteng", "m'", panjang_bgn_m + 2 * ov_m, 96000)
+    tambah(div5, "A.4.6.1.21", "Pemasangan Lisplang Papan GRC Lebar 20 cm", "m'", 2 * (panjang_bgn_m + lebar_bgn_m + 4 * ov_m), 78000)
+    tambah(div5, "A.4.5.1.7", "Pemasangan Plafon Gypsum Board 9 mm + Rangka Hollow Galvanis", "m²", luas_total_m2, 142000)
+
+    # ---------------- DIVISI VI: PENUTUP LANTAI & DINDING KERAMIK ----------------
+    div6 = "VI. PEKERJAAN PENUTUP LANTAI & KERAMIK"
+    tambah(div6, "A.4.4.3.35", "Pemasangan Lantai Keramik Utama 40×40 / 60×60 cm Polished", "m²", luas_lantai_kering, 218000)
+    if luas_lantai_km > 0:
+        tambah(div6, "A.4.4.3.36", "Pemasangan Lantai Keramik KM/WC 20×20 cm Anti-Slip", "m²", luas_lantai_km, 205000)
+    if luas_dinding_km > 0:
+        tambah(div6, "A.4.4.3.54", "Pemasangan Keramik Dinding KM/WC 20×25 cm (t = 1,50 m)", "m²", luas_dinding_km, 232000)
+
+    # ---------------- DIVISI VII: PENGECATAN, SANITAIR & MEP ----------------
+    div7 = "VII. PEKERJAAN PENGECATAN, SANITAIR & INSTALASI"
+    tambah(div7, "A.4.7.1.10", "Pengecatan Dinding Tembok Baru 3 Lapis (Plamir + Cat Dasar + Penutup)", "m²", luas_dinding_net_m2 * 2.0, 36500)
+    tambah(div7, "A.4.7.1.11", "Pengecatan Plafon Gypsum 3 Lapis", "m²", luas_total_m2, 34000)
+    jml_km = max(1, len(ruang_km))
+    tambah(div7, "A.5.1.1.1", "Pemasangan Kloset Duduk / Jongkok Keramik Lengkap Aksesoris", "unit", float(jml_km), 1650000)
+    tambah(div7, "A.5.1.1.19", "Pemasangan Keran Air, Jet Shower & Floor Drain Stainless", "set", float(jml_km), 425000)
+    titik_listrik = max(8, int(round(luas_total_m2 / 3.8)))
+    tambah(div7, "MEP.01", "Instalasi Titik Lampu, Saklar, Stop Kontak & MCB Box", "titik", float(titik_listrik), 265000)
+
+    subtotal = sum(it["jumlah_harga"] for it in items)
+    ppn = round(subtotal * 0.11, 0)
+    grand_total = subtotal + ppn
+    harga_per_m2 = round(grand_total / max(1.0, luas_total_m2), 0)
 
     return {
-        "lahan": ((W + t + 2) * (D + t + 2), f"({W+t:.2f}+2) x ({D+t:.2f}+2) m, sisa 1 m tiap sisi"),
-        "galian": (galian, f"panjang dinding {Lw:.2f} m x lebar {lb+0.2:.2f} m x dalam {tp+0.2:.2f} m"),
-        "pasir_pondasi": (pasir_p, f"{Lw:.2f} x {lb:.2f} x 0,05"),
-        "aanstamping": (aanst, f"{Lw:.2f} x {lb:.2f} x 0,15"),
-        "pondasi": (pond, f"{Lw:.2f} x (({lb:.2f}+{la:.2f})/2) x {tp:.2f}"),
-        "urug_kembali": (max(galian - pasir_p - aanst - pond, 0), "galian - (pasir + aanstamping + pondasi)"),
-        "pasir_lantai": (luas_lantai * 0.10, f"luas lantai bersih {luas_lantai:.2f} m2 x 0,10"),
-        "lantai_kerja": (luas_lantai * 0.05, f"luas lantai bersih {luas_lantai:.2f} m2 x 0,05"),
-        "beton_sloof": (b_sloof, f"{Lw:.2f} x {bs:.2f} x {hs:.2f}"),
-        "beton_kolom": (b_kolom, f"{n_kolom} titik kolom (sudut, simpang, bentang) x {kw:.2f} x {kh:.2f} x {H:.2f}"),
-        "beton_ring": (b_ring, f"{Lw:.2f} x {rw:.2f} x {rh:.2f}"),
-        "besi": (beton * RASIO_BESI, f"beton {beton:.3f} m3 x {RASIO_BESI:.0f} kg/m3 (asumsi)"),
-        "bekisting": (bekisting, "sisi sloof + 4 sisi kolom + sisi dan alas ring balok"),
-        "dinding_bersih": (dinding_bersih, f"{Lw:.2f} x {H:.2f} - bukaan {luas_bukaan:.2f} m2"),
-        "plester": (plester, "2 sisi x luas dinding bersih"),
-        "cat": (max(plester - k_dinding, 0), f"luas plester - keramik dinding {k_dinding:.2f} m2"),
-        "keramik_dinding": (k_dinding, "keliling bersih ruang basah x tinggi keramik - pintu"),
-        "lantai_40": (lantai_40, "luas bersih ruang berlantai 40x40"),
-        "lantai_20": (lantai_20, "luas bersih ruang berlantai 20x20"),
-        "plafon": (plafon, "luas bersih ruang berplafon gypsum"),
-        "list_plafon": (list_plafon, "keliling bersih ruang berplafon gypsum"),
-        "atap": (atap, f"bidang atap pelana, {math.degrees(th):.0f} derajat, overstek {ov:.2f} m"),
-        "nok": (p_nok, "panjang nok = panjang atap searah nok"),
-        "jendela": (jendela, "jumlah lebar x tinggi semua jendela"),
-        "pintu_panel": (len(pintu) - pvc, "jumlah pintu non-PVC"),
-        "pintu_pvc": (pvc, "jumlah pintu PVC"),
-        "kloset": (n_km, "1 per kamar mandi"),
-        "bak": (n_km, "1 per kamar mandi"),
-        "kran": (n_km + n_cuci + n_dapur, "kamar mandi + dapur + ruang cuci"),
-        "drain": (n_km + n_cuci, "kamar mandi + ruang cuci"),
+        "wilayah": wilayah,
+        "ikk": ikk,
+        "jumlah_lantai": 2 if is_2lt else 1,
+        "luas_lt1_m2": round(luas_lt1_m2, 2),
+        "luas_lt2_m2": round(luas_lt2_m2, 2),
+        "luas_total_m2": round(luas_total_m2, 2),
+        "items": items,
+        "subtotal": subtotal,
+        "ppn": ppn,
+        "grand_total": grand_total,
+        "harga_per_m2": harga_per_m2,
     }
 
 
-def hitung_rab(
-    r,
-    overhead: float = 0.12,
-    ppn: float = 0.11,
-    ikk: float = 1.0,
-    harga_override: Optional[Dict[str, float]] = None,
-    **kwargs,
-):
-    """Hitung RAB dengan koefisien wilayah (IKK) dan harga satuan kustom opsional."""
-    vol = hitung_volume(r)
-    harga_aktif = _gabung_harga(harga_override)
-    baris, per_divisi = [], {}
-    for kode, divisi, uraian, sat, kv, komp in PEKERJAAN:
-        hs = sum(k * round(harga_aktif[h][2] * ikk) for h, k in komp)
-        v = vol[kv][0]
-        baris.append((kode, divisi, uraian, sat, v, hs, v * hs))
-        per_divisi[divisi] = per_divisi.get(divisi, 0) + v * hs
-    jl = sum(per_divisi.values())
-    oh = jl * overhead
-    pp = (jl + oh) * ppn
-    return baris, per_divisi, {"jumlah": jl, "overhead": oh, "ppn": pp, "total": jl + oh + pp}
+def ekspor_rab_excel(rumah, hasil_rab: Dict[str, Any], nama_proyek: str = "Rumah Tinggal", pemilik: str = "Pemilik") -> bytes:
+    """Mengekspor hasil perhitungan RAB menjadi file Excel (.XLSX) dengan rumus aktif."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "RAB Konstruksi"
 
+    # Style palette
+    fill_header = PatternFill("solid", fgColor="1E293B")
+    fill_divisi = PatternFill("solid", fgColor="E2E8F0")
+    fill_total = PatternFill("solid", fgColor="DBEAFE")
+    font_title = Font(name="Calibri", size=14, bold=True, color="0F172A")
+    font_sub = Font(name="Calibri", size=10, color="334155")
+    font_th = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+    font_div = Font(name="Calibri", size=10, bold=True, color="0F172A")
+    font_td = Font(name="Calibri", size=10, color="1E293B")
+    font_tot = Font(name="Calibri", size=11, bold=True, color="0F172A")
 
-def buat_rab_excel(
-    r,
-    path="hasil/RAB_rumah.xlsx",
-    overhead: float = 0.12,
-    ppn: float = 0.11,
-    ikk: float = 1.0,
-    wilayah: str = "Kab. Magelang (Basis HSPK 2024)",
-    harga_override: Optional[Dict[str, float]] = None,
-):
-    """Tulis Excel: sheet Harga Satuan, Volume, AHSP, RAB, Rekap (semua dengan rumus hidup & IKK wilayah)."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    vol = hitung_volume(r)
-    harga_aktif = _gabung_harga(harga_override)
+    thin = Side(style="thin", color="CBD5E1")
+    border_cell = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    judul = Font(bold=True, color="FFFFFF")
-    isi_judul = PatternFill("solid", fgColor="1F3A5F")
-    isi_sub = PatternFill("solid", fgColor="DCE6F1")
-    isi_input = PatternFill("solid", fgColor="FFF2CC")
-    RP, V2 = "#,##0", "#,##0.00"
+    # Judul & Identitas Proyek
+    ws["A1"] = "RENCANA ANGGARAN BIAYA (RAB) PEKERJAAN KONSTRUKSI"
+    ws["A1"].font = font_title
+    ws["A2"] = f"Proyek: {nama_proyek} ({hasil_rab['jumlah_lantai']} Lantai — Luas Total {hasil_rab['luas_total_m2']:.2f} m²)"
+    ws["A2"].font = font_sub
+    ws["A3"] = f"Pemilik: {pemilik}  |  Acuan Harga: {hasil_rab['wilayah']} (IKK = {hasil_rab['ikk']:.2f}×)"
+    ws["A3"].font = font_sub
 
-    def header(ws, cols, widths):
-        ws.append(cols)
-        for c in ws[ws.max_row]:
-            c.font, c.fill = judul, isi_judul
-            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        for i, w in enumerate(widths):
-            ws.column_dimensions[chr(65 + i)].width = w
-        ws.freeze_panes = "A2"
+    row = 5
+    headers = ["No", "Kode AHSP", "Uraian Pekerjaan", "Satuan", "Volume", "Harga Satuan (Rp)", "Jumlah Harga (Rp)"]
+    for col_idx, h in enumerate(headers, start=1):
+        c = ws.cell(row=row, column=col_idx, value=h)
+        c.fill = fill_header
+        c.font = font_th
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = border_cell
+    ws.row_dimensions[row].height = 26
 
-    wb = Workbook()
-    # 1. Harga Satuan (mengalikan Harga Basis dengan Indeks Wilayah di Rekap!B2)
-    wh = wb.active
-    wh.title = "Harga Satuan"
-    header(
-        wh,
-        ["Kode", "Uraian", "Satuan", "Harga Basis (Rp)", "Indeks Wilayah", "Harga Berlaku (Rp)", "Sumber"],
-        [20, 38, 10, 18, 15, 20, 30]
-    )
-    for kode, (u, s, h, src) in harga_aktif.items():
-        rr = wh.max_row + 1
-        wh.append([kode, u, s, h, "=Rekap!$B$2", f"=ROUND(D{rr}*E{rr},0)", src])
-        wh.cell(rr, 4).number_format = RP
-        wh.cell(rr, 4).fill = isi_input
-        wh.cell(rr, 5).number_format = "0.00"
-        wh.cell(rr, 6).number_format = RP
-    n_h = wh.max_row
-    cari = lambda kol, kode_cell: f"INDEX('Harga Satuan'!${kol}$2:${kol}${n_h},MATCH({kode_cell},'Harga Satuan'!$A$2:$A${n_h},0))"
+    row += 1
+    current_div = None
+    no_urut = 0
+    div_start_row = row
+    div_total_cells: List[str] = []
 
-    # 2. Volume
-    wv = wb.create_sheet("Volume")
-    header(wv, ["Kode", "Uraian pekerjaan", "Satuan", "Volume", "Cara hitung"], [8, 46, 10, 14, 70])
-    vol_row = {}
-    for kode, divisi, uraian, sat, kv, komp in PEKERJAAN:
-        nilai, ket = vol[kv]
-        wv.append([kode, uraian, sat, round(nilai, 3), ket])
-        wv.cell(wv.max_row, 4).number_format = V2
-        vol_row[kode] = wv.max_row
+    def tutup_divisi(r_akhir: int):
+        nonlocal row
+        if r_akhir < div_start_row:
+            return
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        lbl_cell = ws.cell(row=row, column=1, value=f"Jumlah {current_div}")
+        lbl_cell.font = font_div
+        lbl_cell.alignment = Alignment(horizontal="right", vertical="center")
+        tot_cell = ws.cell(row=row, column=7, value=f"=SUM(G{div_start_row}:G{r_akhir})")
+        tot_cell.font = font_div
+        tot_cell.number_format = "#,##0"
+        for c_i in range(1, 8):
+            ws.cell(row=row, column=c_i).fill = fill_divisi
+            ws.cell(row=row, column=c_i).border = border_cell
+        div_total_cells.append(f"G{row}")
+        row += 1
 
-    # 3. AHSP
-    wa = wb.create_sheet("AHSP")
-    header(wa, ["Kode harga", "Komponen", "Satuan", "Koefisien", "Harga (Rp)", "Jumlah (Rp)"], [20, 38, 10, 12, 16, 16])
-    ahsp_row = {}
-    for kode, divisi, uraian, sat, kv, komp in PEKERJAAN:
-        wa.append([f"{kode}  {uraian} (per {sat})"])
-        for c in wa[wa.max_row]:
-            c.font, c.fill = Font(bold=True), isi_sub
-        mulai = wa.max_row + 1
-        for h, k in komp:
-            rr = wa.max_row + 1
-            wa.append([h, f"={cari('B', f'A{rr}')}", f"={cari('C', f'A{rr}')}", k, f"={cari('F', f'A{rr}')}", f"=D{rr}*E{rr}"])
-            wa.cell(rr, 4).fill = isi_input
-            wa.cell(rr, 4).number_format = "0.0000"
-            wa.cell(rr, 5).number_format = RP
-            wa.cell(rr, 6).number_format = RP
-        rr = wa.max_row + 1
-        wa.append(["", "Harga satuan pekerjaan", "", "", "", f"=SUM(F{mulai}:F{rr-1})"])
-        for c in wa[rr]:
-            c.font = Font(bold=True)
-        wa.cell(rr, 6).number_format = RP
-        ahsp_row[kode] = rr
+    for it in hasil_rab["items"]:
+        if it["divisi"] != current_div:
+            if current_div is not None:
+                tutup_divisi(row - 1)
+            current_div = it["divisi"]
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+            c_div = ws.cell(row=row, column=1, value=current_div)
+            c_div.font = font_div
+            c_div.fill = fill_divisi
+            for c_i in range(1, 8):
+                ws.cell(row=row, column=c_i).border = border_cell
+            row += 1
+            div_start_row = row
+            no_urut = 0
 
-    # 4. RAB
-    wr = wb.create_sheet("RAB")
-    header(wr, ["No", "Divisi", "Uraian pekerjaan", "Satuan", "Volume", "Harga satuan (Rp)", "Jumlah (Rp)"], [8, 24, 46, 10, 12, 18, 18])
-    for kode, divisi, uraian, sat, kv, komp in PEKERJAAN:
-        rr = wr.max_row + 1
-        wr.append([kode, divisi, uraian, sat, f"=Volume!D{vol_row[kode]}", f"=AHSP!F{ahsp_row[kode]}", f"=E{rr}*F{rr}"])
-        wr.cell(rr, 5).number_format = V2
-        wr.cell(rr, 6).number_format = RP
-        wr.cell(rr, 7).number_format = RP
-    akhir_rab = wr.max_row
+        no_urut += 1
+        vals = [no_urut, it["kode"], it["uraian"], it["satuan"], it["volume"], it["harga_satuan"], f"=ROUND(E{row}*F{row},0)"]
+        for c_i, val in enumerate(vals, start=1):
+            c = ws.cell(row=row, column=c_i, value=val)
+            c.font = font_td
+            c.border = border_cell
+            if c_i in (1, 2, 4):
+                c.alignment = Alignment(horizontal="center", vertical="center")
+            elif c_i in (5, 6, 7):
+                c.alignment = Alignment(horizontal="right", vertical="center")
+                c.number_format = "#,##0.00" if c_i == 5 else "#,##0"
+        row += 1
 
-    # 5. Rekap (Baris 2 = Indeks Wilayah editable, Baris 3 = Nama Wilayah)
-    wk = wb.create_sheet("Rekap")
-    header(wk, ["Parameter / Divisi Pekerjaan", "Nilai / Jumlah (Rp)"], [44, 24])
-    wk.append(["Indeks Kemahalan Konstruksi (IKK)", float(ikk)])
-    wk.cell(2, 2).number_format = "0.00"
-    wk.cell(2, 2).fill = isi_input
-    wk.cell(2, 2).font = Font(bold=True)
+    if current_div is not None:
+        tutup_divisi(row - 1)
 
-    wk.append(["Wilayah Acuan Harga", wilayah])
-    wk.cell(3, 2).font = Font(bold=True)
-    wk.append([])
+    row += 1
+    formula_sub = "=" + "+".join(div_total_cells) if div_total_cells else "=0"
+    r_sub = row
+    r_ppn = row + 1
+    r_tot = row + 2
+    r_m2 = row + 3
 
-    a = wk.max_row + 1  # Baris 5
-    divisi_unik = list(dict.fromkeys(p[1] for p in PEKERJAAN))
-    for dv in divisi_unik:
-        rr = wk.max_row + 1
-        wk.append([dv, f"=SUMIF(RAB!$B$2:$B${akhir_rab},A{rr},RAB!$G$2:$G${akhir_rab})"])
-        wk.cell(rr, 2).number_format = RP
-    b = wk.max_row
+    rekap = [
+        ("SUBTOTAL BIAYA KONSTRUKSI", formula_sub, False),
+        ("PPN 11%", f"=ROUND(G{r_sub}*0.11,0)", False),
+        ("TOTAL RENCANA ANGGARAN BIAYA (RAB)", f"=G{r_sub}+G{r_ppn}", True),
+        (f"ESTIMASI BIAYA PER M² ({hasil_rab['luas_total_m2']:.2f} m²)", f"=ROUND(G{r_tot}/{max(1.0, hasil_rab['luas_total_m2'])},0)", False),
+    ]
+    for offset_r, (label_rk, fml, is_bold) in enumerate(rekap):
+        rr = row + offset_r
+        ws.merge_cells(start_row=rr, start_column=1, end_row=rr, end_column=6)
+        c_lbl = ws.cell(row=rr, column=1, value=label_rk)
+        c_val = ws.cell(row=rr, column=7, value=fml)
+        c_lbl.font = font_tot if is_bold else font_div
+        c_val.font = font_tot if is_bold else font_div
+        c_lbl.alignment = Alignment(horizontal="right", vertical="center")
+        c_val.alignment = Alignment(horizontal="right", vertical="center")
+        c_val.number_format = "#,##0"
+        for c_i in range(1, 8):
+            ws.cell(row=rr, column=c_i).border = border_cell
+            if is_bold:
+                ws.cell(row=rr, column=c_i).fill = fill_total
 
-    wk.append(["Jumlah pekerjaan", f"=SUM(B{a}:B{b})"])
-    r_jml = wk.max_row
-    wk.append(["Persen overhead dan keuntungan", overhead])
-    r_ohp = wk.max_row
-    wk.append(["Overhead dan keuntungan", f"=B{r_jml}*B{r_ohp}"])
-    r_oh = wk.max_row
-    wk.append(["Persen PPN", ppn])
-    r_ppp = wk.max_row
-    wk.append(["PPN", f"=(B{r_jml}+B{r_oh})*B{r_ppp}"])
-    r_pp = wk.max_row
-    wk.append(["TOTAL RAB", f"=B{r_jml}+B{r_oh}+B{r_pp}"])
-    r_tot = wk.max_row
-    wk.append(["Dibulatkan (ratusan ribu)", f"=ROUND(B{r_tot},-5)"])
-    for rr in (r_ohp, r_ppp):
-        wk.cell(rr, 2).number_format = "0%"
-        wk.cell(rr, 2).fill = isi_input
-    for rr in (r_jml, r_oh, r_pp, r_tot, r_tot + 1):
-        wk.cell(rr, 2).number_format = RP
-    for rr in (r_jml, r_tot, r_tot + 1):
-        for c in wk[rr]:
-            c.font = Font(bold=True)
-    wk.append([])
-    wk.append(["Catatan: Basis harga dari HSPK/HSD Kab. Magelang 2024 dikalikan IKK Wilayah (sel kuning Rekap!B2). Seluruh sel kuning dapat diubah."])
+    widths = [6, 14, 52, 10, 12, 18, 20]
+    for idx, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = w
 
-    wb.calculation.fullCalcOnLoad = True
-    wb.save(path)
-    return path
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
