@@ -1,6 +1,6 @@
 """
-Rancang.io — Aplikasi Streamlit (Architectural CAD & BOQ Studio)
-Isi data ukuran & wilayah -> Gambar DXF (denah, potongan, 4 tampak) + RAB Excel -> Buka di AutoCAD.
+Rancang.io — Aplikasi Streamlit (Architectural CAD & BOQ Automation Studio)
+Isi data ukuran & wilayah -> Gambar DXF berkop konsultan A3 + RAB Excel -> Buka di AutoCAD.
 """
 import copy
 import hashlib
@@ -24,8 +24,13 @@ from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
 from shapely.geometry import LineString, MultiPoint, Point
 
 import boq.rab
+import drawing.kop
+import drawing.detail
 import drawing.denah
 import drawing.potongan
+importlib.reload(boq.rab)
+importlib.reload(drawing.kop)
+importlib.reload(drawing.detail)
 importlib.reload(drawing.denah)
 importlib.reload(drawing.potongan)
 
@@ -34,12 +39,10 @@ from drawing.potongan import ekspor_gambar_lengkap
 from model.loader import ValidasiRumahError, muat_rumah
 from model.param_rumah import sesuaikan_dimensi_rumah
 
-# Pastikan folder output dibuat relatif terhadap lokasi proyek
 FOLDER = Path("hasil")
 FOLDER.mkdir(exist_ok=True, parents=True)
 IS_WINDOWS = sys.platform.startswith("win")
 
-# Database Koefisien Wilayah (Indeks Kemahalan Konstruksi relatif terhadap Kab. Magelang = 1.00)
 KOEFISIEN_WILAYAH = {
     "Kab. Magelang (Basis HSPK 2024)": 1.00,
     "Kota Yogyakarta": 1.03,
@@ -63,6 +66,13 @@ PRESET_TIPE_RUMAH = {
     "Tipe 54 — Keluarga (6.0 m × 9.0 m)": (6000, 9000),
     "Tipe 60 — Luas (6.0 m × 10.0 m)": (6000, 10000),
     "Tipe 72 — Lebar (8.0 m × 9.0 m)": (8000, 9000),
+}
+
+OPSI_SKALA = {
+    "Otomatis (Menyesuaikan Kertas A3)": None,
+    "Skala Tetap 1 : 50": 50,
+    "Skala Tetap 1 : 75": 75,
+    "Skala Tetap 1 : 100": 100,
 }
 
 
@@ -95,7 +105,7 @@ def buka_di_autocad(path_dxf):
 
 @st.cache_data(show_spinner=False)
 def pratinjau(path_dxf, bbox, versi):
-    """Render satu bagian gambar dari file DXF (bbox = xmin, ymin, xmax, ymax) menjadi PNG."""
+    """Render satu bagian lembar kop dari file DXF (bbox = xmin, ymin, xmax, ymax) menjadi PNG."""
     x0, y0, x1, y1 = bbox
     doc = ezdxf.readfile(str(path_dxf))
     fig = plt.figure(figsize=(12, max(3.2, 12 * (y1 - y0) / max(1, (x1 - x0)))))
@@ -105,7 +115,7 @@ def pratinjau(path_dxf, bbox, versi):
     ax.set_xlim(x0, x1)
     ax.set_ylim(y0, y1)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=120)
+    fig.savefig(buf, format="png", dpi=150)
     plt.close(fig)
     return buf.getvalue()
 
@@ -451,7 +461,7 @@ st.markdown("""
 <div class="studio-header">
     <div class="studio-badge">RANCANG.IO // CAD &amp; BOQ AUTOMATION STUDIO</div>
     <h1 class="studio-title">Generator Gambar Kerja AutoCAD &amp; RAB Konstruksi</h1>
-    <p class="studio-subtitle">Otomasi denah arsitektural, potongan, 4 sisi tampak (.DXF), dan estimasi Rencana Anggaran Biaya (.XLSX) lintas wilayah.</p>
+    <p class="studio-subtitle">Otomasi denah arsitektural, potongan, 4 sisi tampak, detail pondasi/kusen berkop A3 (.DXF) serta RAB (.XLSX).</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -585,16 +595,31 @@ with st.sidebar.form("input_form"):
                 step=1
             )
 
-    with st.expander("2. Identitas & Lokasi RAB", expanded=True):
+        pilihan_skala = st.selectbox(
+            "Skala Lembar Kerja A3",
+            options=list(OPSI_SKALA.keys()),
+            index=0,
+            help="Mode Otomatis menyesuaikan skala tiap lembar (misal 1:50 untuk Tipe 36, 1:20 untuk detail) agar proporsional di kertas A3."
+        )
+
+    with st.expander("2. Identitas Kop & Lokasi RAB", expanded=True):
         nama = st.text_input(
             "Nama Proyek",
             value=data.get("proyek", {}).get("nama", "Rumah Tinggal Sederhana")
+        )
+        klien = st.text_input(
+            "Pemilik / Klien",
+            value=data.get("proyek", {}).get("klien", "Pemilik Bangunan")
+        )
+        perencana = st.text_input(
+            "Perencana / Digambar Oleh",
+            value=data.get("proyek", {}).get("perencana", "Rancang.io Engineering Studio")
         )
         wilayah_terpilih = st.selectbox(
             "Wilayah Acuan Harga (IKK)",
             options=list(KOEFISIEN_WILAYAH.keys()),
             index=0,
-            help="Menyesuaikan indeks harga satuan material dan upah berdasarkan wilayah konstruksi."
+            help="Menyesuaikan indeks harga satuan material dan upah serta lokasi proyek di kop gambar."
         )
 
     kirim = st.form_submit_button(
@@ -608,12 +633,15 @@ with st.sidebar.form("input_form"):
 # -----------------------------------------------------------------
 if kirim and data:
     try:
-        with st.status("Memproses geometri arsitektural dan kalkulasi RAB...", expanded=True) as status:
+        with st.status("Memproses gambar kerja berkop A3 dan kalkulasi RAB...", expanded=True) as status:
             st.write("1/3 Menyesuaikan parameter dimensi dan mendeteksi seluruh titik kolom struktur...")
             data_proses = copy.deepcopy(data)
             if mode == "template":
                 data_proses = sesuaikan_dimensi_rumah(data_proses, lebar, panjang)
                 data_proses.setdefault("proyek", {})["nama"] = nama
+                data_proses.setdefault("proyek", {})["klien"] = klien
+                data_proses.setdefault("proyek", {})["perencana"] = perencana
+                data_proses.setdefault("proyek", {})["lokasi"] = wilayah_terpilih
                 data_proses.setdefault("lantai", {})["tinggi_dinding"] = tinggi
                 data_proses.setdefault("lantai", {})["tinggi_plafon"] = plafon
                 data_proses.setdefault("dinding_default", {})["tebal"] = tebal
@@ -628,11 +656,19 @@ if kirim and data:
             json_path.write_text(json.dumps(data_proses, indent=2, ensure_ascii=False), encoding="utf-8")
             rumah = muat_rumah(str(json_path))
 
-            st.write("2/3 Mengekspor Denah, Potongan, dan 4 Tampak ke file AutoCAD (.DXF)...")
+            st.write("2/3 Mengekspor Denah, Potongan, 4 Tampak & Detail Pondasi/Kusen ke file AutoCAD (.DXF)...")
+            info_kop = {
+                "nama_proyek": nama,
+                "lokasi": wilayah_terpilih,
+                "klien": klien,
+                "perencana": perencana,
+            }
             hasil_dxf, daerah = ekspor_gambar_lengkap(
                 rumah,
                 FOLDER / "gambar_lengkap.dxf",
-                gambar_perabot=gambar_perabot
+                gambar_perabot=gambar_perabot,
+                info_proyek=info_kop,
+                skala_manual=OPSI_SKALA[pilihan_skala],
             )
 
             st.write(f"3/3 Menghitung volume dan menyusun rumus hidup Excel ({wilayah_terpilih})...")
@@ -661,7 +697,7 @@ if kirim and data:
             }
             st.session_state.pop("pesan", None)
             status.update(
-                label=f"Selesai! Dokumen CAD dan RAB ({wilayah_terpilih}) siap diunduh.",
+                label=f"Selesai! File AutoCAD (.DXF) dan RAB ({wilayah_terpilih}) siap digunakan.",
                 state="complete",
                 expanded=False
             )
@@ -707,8 +743,8 @@ with tab_cad:
         mode_dipakai = st.session_state.get("mode_terakhir", mode)
 
         st.success(
-            f"File AutoCAD (.DXF) siap untuk ukuran **{dim_info}** "
-            f"(Mode {mode_dipakai.upper()} — seluruh kolom praktis tercatat di layer `S-COLS` warna merah)."
+            f"Paket Gambar Kerja (8 Lembar A3 Skala Adaptif) siap untuk ukuran **{dim_info}** "
+            f"(Mode {mode_dipakai.upper()} — siap diedit & di-plot ke PDF langsung dari AutoCAD)."
         )
 
         if IS_WINDOWS:
@@ -741,15 +777,18 @@ with tab_cad:
             st.info(st.session_state["pesan"])
 
         daerah = st.session_state["daerah"]
-        pilih = st.radio("Pilih Lembar Gambar Kerja:", list(daerah), horizontal=True)
+        pilih = st.radio("Pilih Lembar Gambar Kerja (Format A3):", list(daerah), horizontal=True)
+        bb_aktif = tuple(daerah[pilih])
+        skala_aktif = max(1, int(round((bb_aktif[2] - bb_aktif[0]) / 420.0)))
+        st.caption(f"Lembar aktif: **{pilih}** — Skala Cetak A3: **1 : {skala_aktif}** (420 × 297 mm)")
         st.image(
-            pratinjau(dxf, tuple(daerah[pilih]), Path(dxf).stat().st_mtime),
+            pratinjau(dxf, bb_aktif, Path(dxf).stat().st_mtime),
             use_container_width=True
         )
     else:
         st.info(
             "Menampilkan pratinjau sketsa denah dan titik kolom secara real-time. "
-            "Klik tombol **Generate Gambar Kerja & RAB** di panel kiri untuk membuat file AutoCAD (.DXF) lengkap beserta potongan dan 4 tampak."
+            "Klik tombol **Generate Gambar Kerja & RAB** di panel kiri untuk membuat file AutoCAD (.DXF)."
         )
         blueprint_png = render_live_blueprint(
             json.dumps(data, sort_keys=True),

@@ -2,7 +2,9 @@
   "proyek": {
     "nama": "Rumah Tipe 36",
     "pemilik": "Contoh",
-    "lokasi": "Kab. Magelang"
+    "lokasi": "Kota Semarang",
+    "klien": "Pemilik Bangunan",
+    "perencana": "Rancang.io Engineering Studio"
   },
   "satuan": "mm",
   "lantai": {
