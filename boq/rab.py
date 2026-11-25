@@ -327,7 +327,7 @@ def buat_rab_excel(
             c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         for i, w in enumerate(widths):
             ws.column_dimensions[chr(65 + i)].width = w
-        ws.freeze_panes = ws.cell(ws.max_row + 1, 1)
+        ws.freeze_panes = (A2)
 
     wb = Workbook()
     # 1. Harga Satuan (mengalikan Harga Basis dengan Indeks Wilayah di Rekap!B2)

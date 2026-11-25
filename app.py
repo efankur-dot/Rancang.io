@@ -23,6 +23,7 @@ from ezdxf.addons.drawing import Frontend, RenderContext
 from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
 from shapely.geometry import LineString, MultiPoint, Point
 
+import boq.rab
 import drawing.denah
 import drawing.potongan
 importlib.reload(drawing.denah)
