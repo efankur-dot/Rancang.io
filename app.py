@@ -20,14 +20,6 @@ import drawing.potongan
 import model.loader
 import model.param_rumah
 
-importlib.reload(ai_parser)
-importlib.reload(model.loader)
-importlib.reload(model.param_rumah)
-importlib.reload(boq.rab)
-importlib.reload(drawing.denah)
-importlib.reload(drawing.detail)
-importlib.reload(drawing.potongan)
-importlib.reload(drawing.kop)
 
 from ai_parser import ambil_api_key, jalankan_benchmark_20, urai_prompt_ke_parameter
 from boq.rab import IKK_WILAYAH, ekspor_rab_excel, hitung_rab
