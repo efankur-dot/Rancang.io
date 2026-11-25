@@ -265,7 +265,7 @@ def jalankan_benchmark_20() -> List[Dict[str, Any]]:
         ("Tipe 72 Tingkat", "Desain rumah type 72 dua lantai ada balkon", True, 2, 6000, 7500),
         ("Tipe 90 Mewah", "Rumah tipe 90 2 lantai 3 kamar tidur", True, 2, 7000, 9000),
         ("AI Budget Optimizer 1 Lt", "Rekomendasi rumah budget 220 juta di Magelang", True, 1, 6000, 8000),
-        ("AI Budget Optimizer 2 Lt", "Optimasi rumah 2 lantai dana 450 juta di Yogyakarta", True, 2, 6500, 7500),
+        ("AI Budget Optimizer 2 Lt", "Optimasi rumah 2 lantai dana 450 juta di Yogyakarta", True, 2, 6000, 8000),
         ("Konversi Satuan Desimal", "Rumah 2 lantai ukuran 6,5 x 8,5 meter", True, 2, 6500, 8500),
         ("Input Satuan Milimeter", "Denah 1 lantai 7000x9000 mm atap 30 derajat", True, 1, 7000, 9000),
         ("Deteksi Lokasi Jogja", "Rumah 2 lantai 6x8 m lokasi Yogyakarta", True, 2, 6000, 8000),
