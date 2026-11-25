@@ -282,6 +282,7 @@ def hitung_rab(
     ppn: float = 0.11,
     ikk: float = 1.0,
     harga_override: Optional[Dict[str, float]] = None,
+    **kwargs,
 ):
     """Hitung RAB dengan koefisien wilayah (IKK) dan harga satuan kustom opsional."""
     vol = hitung_volume(r)
